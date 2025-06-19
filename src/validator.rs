@@ -1,6 +1,11 @@
-use soroban_sdk::{panic_with_error, Address, Env};
+/**
+ * Validation functions for the fee vault.
+ *
+ * Functions in this module must panic if the valid conditions are not met.
+ */
+use soroban_sdk::{panic_with_error, Env};
 
-use crate::{errors::FeeVaultError, storage::has_reserve_vault};
+use crate::{errors::FeeVaultError, storage::Fee};
 
 /// Require that an incoming amount is positive
 ///
@@ -16,15 +21,16 @@ pub fn require_positive(e: &Env, amount: i128, err: FeeVaultError) {
     }
 }
 
-/// Require that the reserve exists in the fee vault
+/// Require that a the rate_type and rate are a valid fee configuration
 ///
 /// ### Arguments
-/// * `reserve` - The reserve to check if exists
-///
-/// ### Panics
-/// * `ReserveNotFound` - If the reserve doesn't exist
-pub fn require_has_reserve(e: &Env, reserve: &Address) {
-    if !has_reserve_vault(e, reserve) {
-        panic_with_error!(e, FeeVaultError::ReserveNotFound);
+/// * `fee` - The fee configuration to check
+pub fn require_valid_fee(e: &Env, fee: &Fee) {
+    if fee.rate > 1_000_0000 {
+        panic_with_error!(&e, FeeVaultError::InvalidFeeRate);
+    }
+
+    if fee.rate_type > 2 {
+        panic_with_error!(&e, FeeVaultError::InvalidFeeRateType);
     }
 }

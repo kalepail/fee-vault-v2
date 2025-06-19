@@ -1,35 +1,33 @@
-use soroban_sdk::{
-    contracttype, panic_with_error, unwrap::UnwrapOptimized, vec, Address, Env, Symbol, Vec,
-};
+use soroban_sdk::{contracttype, panic_with_error, unwrap::UnwrapOptimized, Address, Env, Symbol};
 
-use crate::{errors::FeeVaultError, reserve_vault::ReserveVault};
+use crate::{errors::FeeVaultError, vault::VaultData};
 
 //********** Storage Keys **********//
 
 const POOL_KEY: &str = "Pool";
 const ADMIN_KEY: &str = "Admin";
-const FEE_MODE_KEY: &str = "FeeModeKey";
-const RESERVES_KEY: &str = "Reserves";
+const ASSET_KEY: &str = "Asset";
+const FEE_KEY: &str = "Fee";
+const SIGNER_KEY: &str = "Signer";
 
-#[derive(Clone)]
-#[contracttype]
-pub struct DepositKey {
-    reserve: Address, // the reserve asset address
-    user: Address,    // the user who owns the deposit
-}
+const VAULT_DATA_KEY: &str = "Vault";
 
 #[derive(Clone)]
 #[contracttype]
 pub enum FeeVaultDataKey {
-    Deposit(DepositKey),
-    ResVault(Address),
+    Shares(Address),
 }
 
 #[derive(Clone)]
 #[contracttype]
-pub struct FeeMode {
-    pub is_apr_capped: bool, // whether the vault APR is capped
-    pub value: i128,         // the apr_cap value if is_apr_capped, otherwise the admin's take_rate
+pub struct Fee {
+    /// The vault's fee mode
+    /// * 0 = take rate (admin earns a percentage of the vault's earnings)
+    /// * 1 = capped rate (vault earns at most the APR cap, with any additional returns going to the admin)
+    /// * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplmenting or earning the difference)
+    pub rate_type: u32,
+    /// The vault's fee rate, with 7 decimals (e.g. 1000000 = 10%)
+    pub rate: u32,
 }
 
 //********** Storage Utils **********//
@@ -66,7 +64,7 @@ pub fn set_pool(e: &Env, pool: Address) {
         .set::<Symbol, Address>(&Symbol::new(e, POOL_KEY), &pool);
 }
 
-/// Get the backstop token address
+/// Get the admin address
 pub fn get_admin(e: &Env) -> Address {
     e.storage()
         .instance()
@@ -81,48 +79,70 @@ pub fn set_admin(e: &Env, admin: Address) {
         .set::<Symbol, Address>(&Symbol::new(e, ADMIN_KEY), &admin);
 }
 
-/// Get the fee mode for the fee vault
-pub fn get_fee_mode(e: &Env) -> FeeMode {
+/// Get the asset address
+pub fn get_asset(e: &Env) -> Address {
     e.storage()
         .instance()
-        .get::<Symbol, FeeMode>(&Symbol::new(e, FEE_MODE_KEY))
+        .get::<Symbol, Address>(&Symbol::new(e, ASSET_KEY))
+        .unwrap_optimized()
+}
+
+/// Set the asset address
+pub fn set_asset(e: &Env, asset: Address) {
+    e.storage()
+        .instance()
+        .set::<Symbol, Address>(&Symbol::new(e, ASSET_KEY), &asset);
+}
+
+/// Get the fee mode for the fee vault
+pub fn get_fee(e: &Env) -> Fee {
+    e.storage()
+        .instance()
+        .get::<Symbol, Fee>(&Symbol::new(e, FEE_KEY))
         .unwrap_optimized()
 }
 
 /// Set the fee mode for the fee vault
-pub fn set_fee_mode(e: &Env, mode: FeeMode) {
+pub fn set_fee(e: &Env, fee: Fee) {
     e.storage()
         .instance()
-        .set::<Symbol, FeeMode>(&Symbol::new(e, FEE_MODE_KEY), &mode);
+        .set::<Symbol, Fee>(&Symbol::new(e, FEE_KEY), &fee);
+}
+
+/// Get the signer address. Can be None if no signer is set.
+pub fn get_signer(e: &Env) -> Option<Address> {
+    e.storage()
+        .instance()
+        .get::<Symbol, Address>(&Symbol::new(e, SIGNER_KEY))
+}
+
+/// Set the signer address. If set, cannot be returned to None.
+pub fn set_signer(e: &Env, signer: Address) {
+    e.storage()
+        .instance()
+        .set::<Symbol, Address>(&Symbol::new(e, SIGNER_KEY), &signer);
 }
 
 /********** Persistent **********/
 
-/// Set a reserve's vault data
+/// Set the vault data
 ///
 /// ### Arguments
-/// * `reserve` - The address of the reserve asset
-/// * `vault` - The reserve vault data
-pub fn set_reserve_vault(e: &Env, reserve: &Address, vault: &ReserveVault) {
-    let key = FeeVaultDataKey::ResVault(reserve.clone());
+/// * `vault` - The vault data
+pub fn set_vault_data(e: &Env, vault: &VaultData) {
+    let key = Symbol::new(e, VAULT_DATA_KEY);
     e.storage()
         .persistent()
-        .set::<FeeVaultDataKey, ReserveVault>(&key, vault);
+        .set::<Symbol, VaultData>(&key, vault);
     e.storage()
         .persistent()
         .extend_ttl(&key, LEDGER_THRESHOLD_USER, LEDGER_BUMP_USER);
 }
 
-/// Get a reserve's vault data
-///
-/// ### Arguments
-/// * `reserve` - The address of the reserve asset
-pub fn get_reserve_vault(e: &Env, reserve: &Address) -> ReserveVault {
-    let key = FeeVaultDataKey::ResVault(reserve.clone());
-    let result = e
-        .storage()
-        .persistent()
-        .get::<FeeVaultDataKey, ReserveVault>(&key);
+/// Get the vault data
+pub fn get_vault_data(e: &Env) -> VaultData {
+    let key = Symbol::new(e, VAULT_DATA_KEY);
+    let result = e.storage().persistent().get::<Symbol, VaultData>(&key);
     match result {
         Some(reserve_data) => {
             e.storage()
@@ -134,25 +154,27 @@ pub fn get_reserve_vault(e: &Env, reserve: &Address) -> ReserveVault {
     }
 }
 
-/// Check if a reserve has a vault
+/// Set the number of vault shares a user owns. Shares are stored with 7 decimal places of precision.
 ///
 /// ### Arguments
-/// * `reserve` - The address of the reserve asset
-pub fn has_reserve_vault(e: &Env, reserve: &Address) -> bool {
-    let key = FeeVaultDataKey::ResVault(reserve.clone());
-    e.storage().persistent().has(&key)
+/// * `user` - The address of the user
+/// * `shares` - The number of shares the user owns
+pub fn set_vault_shares(e: &Env, user: &Address, shares: i128) {
+    let key = FeeVaultDataKey::Shares(user.clone());
+    e.storage()
+        .persistent()
+        .set::<FeeVaultDataKey, i128>(&key, &shares);
+    e.storage()
+        .persistent()
+        .extend_ttl(&key, LEDGER_THRESHOLD_USER, LEDGER_BUMP_USER);
 }
 
 /// Get the number of vault shares a user owns. Shares are stored with 7 decimal places of precision.
 ///
 /// ### Arguments
-/// * `reserve` - The address of the reserve asset
 /// * `user` - The address of the user
-pub fn get_reserve_vault_shares(e: &Env, reserve: &Address, user: &Address) -> i128 {
-    let key = FeeVaultDataKey::Deposit(DepositKey {
-        reserve: reserve.clone(),
-        user: user.clone(),
-    });
+pub fn get_vault_shares(e: &Env, user: &Address) -> i128 {
+    let key = FeeVaultDataKey::Shares(user.clone());
     let result = e.storage().persistent().get::<FeeVaultDataKey, i128>(&key);
     match result {
         Some(shares) => {
@@ -162,60 +184,5 @@ pub fn get_reserve_vault_shares(e: &Env, reserve: &Address, user: &Address) -> i
             shares
         }
         None => 0,
-    }
-}
-
-/// Set the number of vault shares a user owns. Shares are stored with 7 decimal places of precision.
-///
-/// ### Arguments
-/// * `reserve` - The address of the reserve asset
-/// * `user` - The address of the user
-/// * `shares` - The number of shares the user owns
-pub fn set_reserve_vault_shares(e: &Env, reserve: &Address, user: &Address, shares: i128) {
-    let key = FeeVaultDataKey::Deposit(DepositKey {
-        reserve: reserve.clone(),
-        user: user.clone(),
-    });
-    e.storage()
-        .persistent()
-        .set::<FeeVaultDataKey, i128>(&key, &shares);
-    e.storage()
-        .persistent()
-        .extend_ttl(&key, LEDGER_THRESHOLD_USER, LEDGER_BUMP_USER);
-}
-
-/// Add a reserve to the list of supported reserves
-///
-/// ### Arguments
-/// * `reserve` - The address of the reserve asset
-pub fn add_reserve_to_reserves(e: &Env, reserve: Address) {
-    let key = Symbol::new(e, RESERVES_KEY);
-
-    let mut reserves = get_reserves(e);
-    reserves.push_back(reserve);
-
-    e.storage()
-        .persistent()
-        .set::<Symbol, Vec<Address>>(&key, &reserves);
-    e.storage()
-        .persistent()
-        .extend_ttl(&key, LEDGER_THRESHOLD_USER, LEDGER_BUMP_USER);
-}
-
-/// Get all the supported reserves
-///
-/// Note: Since Blend-v2 supports up to 30 assets,
-/// we know for fact that the Vec fits in a single storage slot
-pub fn get_reserves(e: &Env) -> Vec<Address> {
-    let key = Symbol::new(e, RESERVES_KEY);
-    let result = e.storage().persistent().get::<Symbol, Vec<Address>>(&key);
-    match result {
-        Some(reserves) => {
-            e.storage()
-                .persistent()
-                .extend_ttl(&key, LEDGER_THRESHOLD_USER, LEDGER_BUMP_USER);
-            reserves
-        }
-        None => vec![e],
     }
 }

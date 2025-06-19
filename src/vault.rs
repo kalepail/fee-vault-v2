@@ -8,22 +8,20 @@ use soroban_fixed_point_math::{i128, FixedPoint};
 use soroban_sdk::{contracttype, panic_with_error, unwrap::UnwrapOptimized, Address, Env};
 
 #[contracttype]
-pub struct ReserveVault {
-    /// The reserve asset address
-    pub address: Address,
-    /// The reserve's last bRate
-    pub b_rate: i128,
+pub struct VaultData {
     /// The timestamp of the last update
     pub last_update_timestamp: u64,
+    /// The reserve's last bRate
+    pub b_rate: i128,
     /// The total shares issued by the reserve vault
     pub total_shares: i128,
-    /// The total bToken deposits owned by the reserve vault depositors. Excludes accrued fees.
+    /// The total bToken deposits owned by the reserve vault depositors. Excludes admin balance.
     pub total_b_tokens: i128,
-    /// The number of bTokens the admin is due
-    pub accrued_fees: i128,
+    /// The admin's bTokens. Excluded from the `total_b_tokens` value.
+    pub admin_balance: i128,
 }
 
-impl ReserveVault {
+impl VaultData {
     /// Converts a b_token amount to shares rounding down
     pub fn b_tokens_to_shares_down(&self, amount: i128) -> i128 {
         if self.total_shares == 0 || self.total_b_tokens == 0 {
@@ -73,9 +71,9 @@ impl ReserveVault {
     }
 
     /// Updates the reserve's bRate and accrues fees to the admin in accordance with the portion of interest they earned
-    fn update_rate(&mut self, e: &Env) {
+    fn update_rate(&mut self, e: &Env, pool: &Address, asset: &Address) {
         let now = e.ledger().timestamp();
-        let new_rate = pool::reserve_b_rate(e, &self.address);
+        let new_rate = pool::reserve_b_rate(e, &pool, &asset);
         // if the rate didn't increase, admin won't take any fees, so short circuit the math
         // and just apply the b_rate update here
         if new_rate <= self.b_rate {
@@ -84,11 +82,11 @@ impl ReserveVault {
             return;
         }
 
-        let fee_mode = storage::get_fee_mode(e);
+        let fee = storage::get_fee(e);
         // this can round to zero if new_rate ~= target_b_rate
         // admin_take_b_tokens calc should round down, to prevent any rounding spam exploits
-        let admin_take_b_tokens = if fee_mode.is_apr_capped {
-            let target_apr = fee_mode.value;
+        let admin_take_b_tokens = if fee.rate_type == 0 {
+            let target_apr = fee.rate as i128;
             let time_elapsed = now - self.last_update_timestamp;
 
             // Target growth rate for target APR over the time elapsed scaled to 12 decimals
@@ -111,7 +109,7 @@ impl ReserveVault {
                     .unwrap_optimized()
             }
         } else {
-            let admin_take_rate = fee_mode.value;
+            let admin_take_rate = fee.rate as i128;
             self.total_b_tokens
                 .fixed_mul_floor(new_rate - self.b_rate, SCALAR_12)
                 .unwrap_optimized()
@@ -130,30 +128,29 @@ impl ReserveVault {
         }
 
         self.total_b_tokens = self.total_b_tokens - admin_take_b_tokens;
-        self.accrued_fees = self.accrued_fees + admin_take_b_tokens;
+        self.admin_balance = self.admin_balance + admin_take_b_tokens;
     }
 }
 
 /// Get the reserve vault from storage and update the bRate
 ///
 /// ### Arguments
-/// * `address` - The reserve address
+/// * `pool` - The pool address
+/// * `asset` - The asset address
 ///
 /// ### Returns
 /// * `ReserveVault` - The updated reserve vault
-///
-/// ### Panics
-/// * `ReserveNotFound` - If the reserve does not exist
-pub fn get_reserve_vault_updated(e: &Env, address: &Address) -> ReserveVault {
-    let mut vault = storage::get_reserve_vault(e, address);
-    vault.update_rate(e);
+pub fn get_vault_updated(e: &Env, pool: &Address, asset: &Address) -> VaultData {
+    let mut vault = storage::get_vault_data(e);
+    vault.update_rate(e, pool, asset);
     vault
 }
 
-/// Deposit into the reserve vault. Does not perform the call to the pool to deposit the tokens.
+/// Deposit into the vault. Does not perform the call to the pool to deposit the tokens.
 ///
 /// ### Arguments
-/// * `reserve` - The reserve address
+/// * `pool` - The pool address
+/// * `asset` - The asset address
 /// * `user` - The user that deposited the tokens
 /// * `amount` - The amount of underlying deposited
 ///
@@ -162,28 +159,35 @@ pub fn get_reserve_vault_updated(e: &Env, address: &Address) -> ReserveVault {
 ///
 /// ### Panics
 /// * If the underlying amount is less than or equal to 0
-pub fn deposit(e: &Env, reserve: &Address, user: &Address, amount: i128) -> (i128, i128) {
-    let mut vault = get_reserve_vault_updated(e, &reserve);
+pub fn deposit(
+    e: &Env,
+    pool: &Address,
+    asset: &Address,
+    user: &Address,
+    amount: i128,
+) -> (i128, i128) {
+    let mut vault = get_vault_updated(e, pool, asset);
 
     let b_tokens_amount = vault.underlying_to_b_tokens_down(amount);
     require_positive(e, b_tokens_amount, FeeVaultError::InvalidBTokensMinted);
 
-    let mut user_shares = storage::get_reserve_vault_shares(e, &vault.address, user);
+    let mut user_shares = storage::get_vault_shares(e, user);
     let share_amount = vault.b_tokens_to_shares_down(b_tokens_amount);
     require_positive(e, share_amount, FeeVaultError::InvalidSharesMinted);
 
     vault.total_shares += share_amount;
     vault.total_b_tokens += b_tokens_amount;
     user_shares += share_amount;
-    storage::set_reserve_vault(e, &vault.address, &vault);
-    storage::set_reserve_vault_shares(e, &vault.address, user, user_shares);
+    storage::set_vault_data(e, &vault);
+    storage::set_vault_shares(e, user, user_shares);
     (b_tokens_amount, share_amount)
 }
 
-/// Withdraw from the reserve vault. Does not perform the call to the pool to withdraw the tokens.
+/// Withdraw from the vault. Does not perform the call to the pool to withdraw the tokens.
 ///
 /// ### Arguments
-/// * `reserve` - The reserve address
+/// * `pool` - The pool address
+/// * `asset` - The user address
 /// * `user` - The user withdrawing tokens
 /// * `amount` - The amount of underlying amount withdrawn from the vault
 ///
@@ -193,11 +197,17 @@ pub fn deposit(e: &Env, reserve: &Address, user: &Address, amount: i128) -> (i12
 /// ### Panics
 /// * If the amount is less than or equal to 0
 /// * If the user does not have enough shares or bTokens to withdraw
-pub fn withdraw(e: &Env, reserve: &Address, user: &Address, amount: i128) -> (i128, i128) {
-    let mut vault = get_reserve_vault_updated(e, &reserve);
+pub fn withdraw(
+    e: &Env,
+    pool: &Address,
+    asset: &Address,
+    user: &Address,
+    amount: i128,
+) -> (i128, i128) {
+    let mut vault = get_vault_updated(e, pool, asset);
     let b_tokens_amount = vault.underlying_to_b_tokens_up(amount);
 
-    let mut user_shares = storage::get_reserve_vault_shares(e, &vault.address, user);
+    let mut user_shares = storage::get_vault_shares(e, user);
     let share_amount = vault.b_tokens_to_shares_up(b_tokens_amount);
     require_positive(e, share_amount, FeeVaultError::InvalidBTokensBurnt);
 
@@ -212,38 +222,57 @@ pub fn withdraw(e: &Env, reserve: &Address, user: &Address, amount: i128) -> (i1
     vault.total_b_tokens -= b_tokens_amount;
 
     user_shares -= share_amount;
-    storage::set_reserve_vault(e, &vault.address, &vault);
-    storage::set_reserve_vault_shares(e, &vault.address, user, user_shares);
+    storage::set_vault_data(e, &vault);
+    storage::set_vault_shares(e, user, user_shares);
     (b_tokens_amount, share_amount)
 }
 
-/// Claim fees from the reserve vault. Does not perform the call to the pool to claim the fees.
+/// Admin deposits tokens into the vault. Does not perform the call to the pool to deposit the tokens.
 ///
 /// ### Arguments
-/// * `reserve` - The reserve address
-
+/// * `pool` - The pool address
+/// * `asset` - The asset address
+/// * `amount` - The amount of tokens to deposit into the vault
 ///
-/// ### Panics
-/// * If the accrued bToken amount is less than or equal to 0
-pub fn claim_fees(e: &Env, reserve: &Address) -> (i128, i128) {
-    let mut vault = get_reserve_vault_updated(e, &reserve);
-    let b_tokens_amount = vault.accrued_fees;
-    require_positive(e, b_tokens_amount, FeeVaultError::InsufficientAccruedFees);
+/// ### Returns
+/// * The amount of bTokens added to the admin balance
+pub fn admin_deposit(e: &Env, pool: &Address, asset: &Address, amount: i128) -> i128 {
+    let mut vault = get_vault_updated(e, pool, asset);
 
-    let underlying_amount = vault.b_tokens_to_underlying_down(b_tokens_amount);
-    vault.accrued_fees = 0;
-    storage::set_reserve_vault(e, &vault.address, &vault);
-    (b_tokens_amount, underlying_amount)
+    let b_tokens_amount = vault.underlying_to_b_tokens_down(amount);
+    require_positive(e, b_tokens_amount, FeeVaultError::InvalidBTokensMinted);
+
+    vault.admin_balance += b_tokens_amount;
+
+    storage::set_vault_data(e, &vault);
+    b_tokens_amount
 }
 
-/// Accrues interest and updates the b_rate for all reserves
-pub fn accrue_interest_for_all_reserves(e: &Env) {
-    let reserves = storage::get_reserves(e);
+/// Admin withdraws tokens from the vault. Does not perform the call to the pool to withdraw the tokens.
+///
+/// ### Arguments
+/// * `pool` - The pool address
+/// * `asset` - The asset address
+/// * `amount` - The amount of tokens to withdraw from the vault
+///
+/// ### Returns
+/// * The amount of bTokens burnt from the admin balance
+///
+/// ### Panics
+/// * If the admin balance does not have enough bTokens to withdraw
+pub fn admin_withdraw(e: &Env, pool: &Address, asset: &Address, amount: i128) -> i128 {
+    let mut vault = get_vault_updated(e, pool, asset);
 
-    for reserve in reserves {
-        let updated_vault = get_reserve_vault_updated(e, &reserve);
-        storage::set_reserve_vault(e, &reserve, &updated_vault);
+    let b_tokens_burnt = vault.underlying_to_b_tokens_up(amount);
+    require_positive(e, b_tokens_burnt, FeeVaultError::InvalidBTokensBurnt);
+
+    if b_tokens_burnt > vault.admin_balance {
+        panic_with_error!(e, FeeVaultError::BalanceError);
     }
+    vault.admin_balance -= b_tokens_burnt;
+
+    storage::set_vault_data(e, &vault);
+    b_tokens_burnt
 }
 
 #[cfg(test)]
