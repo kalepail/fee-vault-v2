@@ -4,13 +4,13 @@ test: build
 	cargo test --all --tests
 
 build:
-	cargo rustc --manifest-path=Cargo.toml --crate-type=cdylib --target=wasm32-unknown-unknown --release
+	stellar contract build
 
-	mkdir -p target/wasm32-unknown-unknown/optimized
+	mkdir -p target/wasm32v1-none/optimized
 	stellar contract optimize \
-		--wasm target/wasm32-unknown-unknown/release/fee_vault.wasm \
-		--wasm-out target/wasm32-unknown-unknown/optimized/fee_vault.wasm
-	cd target/wasm32-unknown-unknown/optimized/ && \
+		--wasm target/wasm32v1-none/release/fee_vault_v2.wasm \
+		--wasm-out target/wasm32v1-none/optimized/fee_vault_v2.wasm
+	cd target/wasm32v1-none/optimized/ && \
 		for i in *.wasm ; do \
 			ls -l "$$i"; \
 		done
