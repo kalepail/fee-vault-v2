@@ -114,23 +114,23 @@ impl FeeVault {
         }
     }
 
-    /// Fetch the accrued fees in underlying tokens
+    /// Fetch the admin balance in underlying tokens
     ///
     /// ### Returns
     /// * `i128` - The admin's accrued fees in underlying tokens, or 0 if the reserve does not exist
-    pub fn get_collected_fees(e: Env) -> i128 {
+    pub fn get_underlying_admin_balance(e: Env) -> i128 {
         let pool = storage::get_pool(&e);
         let asset = storage::get_asset(&e);
         let vault = vault::get_vault_updated(&e, &pool, &asset);
         vault.b_tokens_to_underlying_down(vault.admin_balance)
     }
 
-    /// Get the blend pool address
+    /// Get the vault's blend pool it deposits into and the asset it supports.
     ///
     /// ### Returns
-    /// * `Address` - The blend pool address
-    pub fn get_pool(e: Env) -> Address {
-        storage::get_pool(&e)
+    /// * `(Address, Address)` - (The blend pool address, the asset address)
+    pub fn get_config(e: Env) -> (Address, Address) {
+        (storage::get_pool(&e), storage::get_asset(&e))
     }
 
     /// Get the vault data
@@ -141,6 +141,30 @@ impl FeeVault {
         let pool = storage::get_pool(&e);
         let asset = storage::get_asset(&e);
         vault::get_vault_updated(&e, &pool, &asset)
+    }
+
+    /// Get the vault's fee configuration
+    ///
+    /// ### Returns
+    /// * `Fee` - The fee configuration for the vault
+    pub fn get_fee(e: Env) -> storage::Fee {
+        storage::get_fee(&e)
+    }
+
+    /// Get the vault's admin
+    ///
+    /// ### Returns
+    /// * `Address` - The admin address for the vault
+    pub fn get_admin(e: Env) -> Address {
+        storage::get_admin(&e)
+    }
+
+    /// Get the vault's signer
+    ///
+    /// ### Returns
+    /// * `Option<Address>` - The signer address for the vault, or None if no signer is set
+    pub fn get_signer(e: Env) -> Option<Address> {
+        storage::get_signer(&e)
     }
 
     //********** Read-Write Admin Only ***********//

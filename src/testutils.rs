@@ -13,20 +13,47 @@ use soroban_sdk::{
     vec, Address, BytesN, Env, String, Symbol,
 };
 
-// Defaults to a mock pool with a b_rate of 1_100_000_000 and a take_rate of 0_1000000.
+/// Defaults to a mock pool with a b_rate of 1_100_000_000 and a take_rate of 0_1000000.
 pub(crate) fn register_fee_vault(
     e: &Env,
-    constructor_args: Option<(Address, Address, bool, i128)>,
+    admin: &Address,
+    pool: &Address,
+    asset: &Address,
+    rate_type: u32,
+    rate: u32,
+    signer: Option<Address>,
 ) -> Address {
     e.register(
         FeeVault {},
-        constructor_args.unwrap_or((
-            Address::generate(e),
-            mockpool::register_mock_pool_with_b_rate(e, 1_100_000_000_000).address,
-            false,
-            0_1000000,
-        )),
+        (
+            admin.clone(),
+            pool.clone(),
+            asset.clone(),
+            rate_type,
+            rate,
+            signer,
+        ),
     )
+}
+
+/// Create a test fee vault. If no initial b_rate is provided, it defaults to 1_100_000_000.
+/// Uses a mock pool underneath so no deposits or withdrawls are functional.
+///
+/// Returns (vault address, mock pool address, mock token address)
+pub(crate) fn create_test_fee_vault(
+    e: &Env,
+    admin: &Address,
+    rate_type: u32,
+    rate: u32,
+    b_rate: Option<i128>,
+) -> (Address, Address, Address) {
+    let pool =
+        mockpool::register_mock_pool_with_b_rate(e, b_rate.unwrap_or(1_100_000_000_000)).address;
+    let asset = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let vault = register_fee_vault(e, &admin, &pool, &asset, rate_type, rate, None);
+    (vault, pool, asset)
 }
 
 pub(crate) fn create_blend_pool(
@@ -119,17 +146,6 @@ pub(crate) fn create_blend_pool(
     e.jump(ONE_DAY_LEDGERS * 7);
     blend_fixture.emitter.distribute();
     return pool;
-}
-
-/// Create a fee vault
-pub(crate) fn create_fee_vault(
-    e: &Env,
-    admin: &Address,
-    pool: &Address,
-    apr_capped: bool,
-    value: i128,
-) -> Address {
-    register_fee_vault(e, Some((admin.clone(), pool.clone(), apr_capped, value)))
 }
 
 pub trait EnvTestUtils {

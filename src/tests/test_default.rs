@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::constants::{SCALAR_12, SCALAR_7};
-use crate::testutils::{assert_approx_eq_abs, create_blend_pool, create_fee_vault, EnvTestUtils};
+use crate::testutils::{assert_approx_eq_abs, create_blend_pool, register_fee_vault, EnvTestUtils};
 use crate::FeeVaultClient;
 use blend_contract_sdk::pool::{Client as PoolClient, PoolDataKey, Request};
 use blend_contract_sdk::testutils::BlendFixture;
@@ -18,7 +18,6 @@ fn test_default() {
     e.set_default_info();
 
     let bombadil = Address::generate(&e);
-    let gandalf = Address::generate(&e);
     let frodo = Address::generate(&e);
     let samwise = Address::generate(&e);
 
@@ -40,8 +39,8 @@ fn test_default() {
     // emits to each reserve token evently, and starts emissions
     let pool = create_blend_pool(&e, &blend_fixture, &bombadil, &usdc_client, &xlm_client);
     let pool_client = PoolClient::new(&e, &pool);
-    let fee_vault = create_fee_vault(&e, &gandalf, &pool, false, 100_0000);
-    let fee_vault_client = FeeVaultClient::new(&e, &fee_vault);
+    let fee_vault = register_fee_vault(&e, &bombadil, &pool, &usdc, 0, 100_0000, None);
+    let fee_vault_usdc_client = FeeVaultClient::new(&e, &fee_vault);
 
     // Setup pool util rate
     // Bomadil deposits 200k tokens and borrows 100k tokens for a 50% util rate
@@ -72,8 +71,6 @@ fn test_default() {
         .mock_all_auths()
         .submit(&bombadil, &bombadil, &bombadil, &requests);
 
-    fee_vault_client.add_reserve_vault(&usdc);
-
     let pool_usdc_balance_start = usdc_client.balance(&pool);
 
     // have samwise and frodo deposit funds into reserve vault
@@ -82,15 +79,15 @@ fn test_default() {
     usdc_client.mint(&samwise, &(samwise_deposit * 2));
     usdc_client.mint(&frodo, &(frodo_deposit * 2));
 
-    fee_vault_client.deposit(&usdc, &samwise, &samwise_deposit);
-    fee_vault_client.deposit(&usdc, &frodo, &frodo_deposit);
+    fee_vault_usdc_client.deposit(&samwise, &samwise_deposit);
+    fee_vault_usdc_client.deposit(&frodo, &frodo_deposit);
 
     assert_eq!(
-        fee_vault_client.get_underlying_tokens(&usdc, &samwise),
+        fee_vault_usdc_client.get_underlying_tokens(&samwise),
         samwise_deposit
     );
     assert_eq!(
-        fee_vault_client.get_underlying_tokens(&usdc, &frodo),
+        fee_vault_usdc_client.get_underlying_tokens(&frodo),
         frodo_deposit
     );
     assert_eq!(
@@ -103,10 +100,10 @@ fn test_default() {
     e.jump_time(30 * 86400);
 
     // have frodo do a 10 stroop deposit to trigger fee accrual this block
-    fee_vault_client.deposit(&usdc, &frodo, &10);
+    fee_vault_usdc_client.deposit(&frodo, &10);
 
     // check fee accrual amount is not dust
-    let cur_accrued = fee_vault_client.get_collected_fees(&usdc);
+    let cur_accrued = fee_vault_usdc_client.get_underlying_admin_balance();
     assert!(cur_accrued > 0);
 
     let usdc_data = pool_client.get_reserve(&usdc);
@@ -139,8 +136,8 @@ fn test_default() {
         .unwrap_optimized();
 
     // withdraw frodo at the same time and check he took expected loss
-    let frodo_withdraw_amount = fee_vault_client.get_underlying_tokens(&usdc, &frodo);
-    fee_vault_client.withdraw(&usdc, &frodo, &frodo_withdraw_amount);
+    let frodo_withdraw_amount = fee_vault_usdc_client.get_underlying_tokens(&frodo);
+    fee_vault_usdc_client.withdraw(&frodo, &frodo_withdraw_amount);
     assert_approx_eq_abs(
         frodo_withdraw_amount,
         frodo_deposit
@@ -153,8 +150,8 @@ fn test_default() {
     e.jump_time(100);
 
     // withdraw samwise and check loss
-    let samwise_withdraw_amount = fee_vault_client.get_underlying_tokens(&usdc, &samwise);
-    fee_vault_client.withdraw(&usdc, &samwise, &samwise_withdraw_amount);
+    let samwise_withdraw_amount = fee_vault_usdc_client.get_underlying_tokens(&samwise);
+    fee_vault_usdc_client.withdraw(&samwise, &samwise_withdraw_amount);
     assert_approx_eq_abs(
         samwise_withdraw_amount,
         samwise_deposit
