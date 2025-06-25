@@ -129,8 +129,8 @@ fn test_happy_path() {
         },
     ];
     assert_eq!(
-        e.auths()[0],
-        (
+        e.auths(),
+        [(
             frodo.clone(),
             AuthorizedInvocation {
                 function: AuthorizedFunction::Contract((
@@ -165,10 +165,71 @@ fn test_happy_path() {
                     }]
                 }]
             }
-        )
+        )]
     );
 
+    // gandalf to set bombadil as signer
+    fee_vault_client.set_signer(&bombadil);
+
     fee_vault_client.deposit(&samwise, &starting_balance);
+    // -> verify deposit auth with signer
+    let deposit_request = vec![
+        &e,
+        Request {
+            request_type: 0,
+            address: usdc.clone(),
+            amount: starting_balance.clone(),
+        },
+    ];
+    let fee_vault_auth_function = AuthorizedFunction::Contract((
+        fee_vault.clone(),
+        Symbol::new(&e, "deposit"),
+        vec![&e, samwise.to_val(), starting_balance.into_val(&e)],
+    ));
+    assert_eq!(
+        e.auths(),
+        [
+            (
+                samwise.clone(),
+                AuthorizedInvocation {
+                    function: fee_vault_auth_function.clone(),
+                    sub_invocations: std::vec![AuthorizedInvocation {
+                        function: AuthorizedFunction::Contract((
+                            pool.clone(),
+                            Symbol::new(&e, "submit"),
+                            vec![
+                                &e,
+                                fee_vault.to_val(),
+                                samwise.to_val(),
+                                samwise.to_val(),
+                                deposit_request.to_val(),
+                            ]
+                        )),
+                        sub_invocations: std::vec![AuthorizedInvocation {
+                            function: AuthorizedFunction::Contract((
+                                usdc.clone(),
+                                Symbol::new(&e, "transfer"),
+                                vec![
+                                    &e,
+                                    samwise.to_val(),
+                                    pool.to_val(),
+                                    starting_balance.into_val(&e)
+                                ]
+                            )),
+                            sub_invocations: std::vec![]
+                        }]
+                    }]
+                }
+            ),
+            (
+                bombadil.clone(),
+                AuthorizedInvocation {
+                    function: fee_vault_auth_function,
+                    sub_invocations: std::vec![]
+                }
+            )
+        ]
+    );
 
     // verify deposit (pool b_rate still 1 as no time has passed)
     assert_eq!(usdc_client.balance(&frodo), 0);
@@ -264,8 +325,8 @@ fn test_happy_path() {
     fee_vault_client.withdraw(&frodo, &withdraw_amount);
     // -> verify withdraw auth
     assert_eq!(
-        e.auths()[0],
-        (
+        e.auths(),
+        [(
             frodo.clone(),
             AuthorizedInvocation {
                 function: AuthorizedFunction::Contract((
@@ -275,7 +336,7 @@ fn test_happy_path() {
                 )),
                 sub_invocations: std::vec![]
             }
-        )
+        )]
     );
 
     fee_vault_client.withdraw(&samwise, &withdraw_amount);
