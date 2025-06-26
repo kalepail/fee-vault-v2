@@ -117,4 +117,36 @@ impl FeeVaultEvents {
 
         e.events().publish(topics, (rate_type, rate));
     }
+
+    /// Emitted when vault rewards are set
+    ///
+    /// - topics - `["vault_rewards_set", admin: Address, token: Address]`
+    /// - data - `[reward_amount: i128, expiration: u64]`
+    pub fn vault_rewards_set(
+        e: &Env,
+        admin: &Address,
+        token: &Address,
+        reward_amount: i128,
+        expiration: u64,
+    ) {
+        let topics = (
+            Symbol::new(&e, "vault_rewards_set"),
+            admin.clone(),
+            token.clone(),
+        );
+        e.events().publish(topics, (reward_amount, expiration));
+    }
+
+    /// Emitted when a user claims rewards from the vault
+    ///
+    /// - topics - `["vault_rewards_claim", user: Address, token: Address]`
+    /// - data - `[amount: i128]`
+    pub fn vault_rewards_claim(e: &Env, user: &Address, token: &Address, amount: i128) {
+        let topics = (
+            Symbol::new(&e, "vault_rewards_claim"),
+            user.clone(),
+            token.clone(),
+        );
+        e.events().publish(topics, (amount,));
+    }
 }

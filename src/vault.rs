@@ -1,7 +1,9 @@
 use crate::{
     constants::{SCALAR_12, SCALAR_7, SECONDS_PER_YEAR},
     errors::FeeVaultError,
-    pool, storage,
+    pool,
+    rewards::update_rewards,
+    storage,
     validator::require_positive,
 };
 use soroban_fixed_point_math::{i128, FixedPoint};
@@ -190,11 +192,12 @@ pub fn deposit(
     amount: i128,
 ) -> (i128, i128) {
     let mut vault = get_vault_updated(e, pool, asset);
+    let mut user_shares = storage::get_vault_shares(e, user);
+
+    update_rewards(e, vault.total_shares, user, user_shares);
 
     let b_tokens_amount = vault.underlying_to_b_tokens_down(amount);
     require_positive(e, b_tokens_amount, FeeVaultError::InvalidBTokensMinted);
-
-    let mut user_shares = storage::get_vault_shares(e, user);
     let share_amount = vault.b_tokens_to_shares_down(b_tokens_amount);
     require_positive(e, share_amount, FeeVaultError::InvalidSharesMinted);
 
@@ -228,11 +231,14 @@ pub fn withdraw(
     amount: i128,
 ) -> (i128, i128) {
     let mut vault = get_vault_updated(e, pool, asset);
-    let b_tokens_amount = vault.underlying_to_b_tokens_up(amount);
-
     let mut user_shares = storage::get_vault_shares(e, user);
+
+    update_rewards(e, vault.total_shares, user, user_shares);
+
+    let b_tokens_amount = vault.underlying_to_b_tokens_up(amount);
+    require_positive(e, b_tokens_amount, FeeVaultError::InvalidBTokensBurnt);
     let share_amount = vault.b_tokens_to_shares_up(b_tokens_amount);
-    require_positive(e, share_amount, FeeVaultError::InvalidBTokensBurnt);
+    require_positive(e, share_amount, FeeVaultError::InvalidSharesBurnt);
 
     if vault.total_shares < share_amount || vault.total_b_tokens < b_tokens_amount {
         panic_with_error!(e, FeeVaultError::InsufficientReserves);

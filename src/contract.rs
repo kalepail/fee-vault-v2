@@ -1,12 +1,13 @@
 use crate::{
     errors::FeeVaultError,
     events::FeeVaultEvents,
-    pool, storage,
+    pool, rewards,
+    storage::{self, RewardData},
     validator::{require_positive, require_valid_fee},
     vault::{self, VaultData},
 };
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, unwrap::UnwrapOptimized, Address, Env, Vec};
 
 #[contract]
 pub struct FeeVault;
@@ -167,6 +168,25 @@ impl FeeVault {
         storage::get_signer(&e)
     }
 
+    /// Get the current reward token for the fee vault
+    ///
+    /// ### Returns
+    /// * `Address` - The address of the reward token`
+    pub fn get_reward_token(e: Env) -> Address {
+        storage::get_reward_token(&e).unwrap_optimized()
+    }
+
+    /// Get the reward data for a specific token
+    ///
+    /// ### Arguments
+    /// * `token` - The address of the reward token
+    ///
+    /// ### Returns
+    /// * `Option<RewardData>` - The reward data for the token, or None if no data exists
+    pub fn get_reward_data(e: Env, token: Address) -> Option<RewardData> {
+        storage::get_reward_data(&e, &token)
+    }
+
     //********** Read-Write Admin Only ***********//
 
     /// ADMIN ONLY
@@ -301,6 +321,33 @@ impl FeeVault {
         b_tokens_burnt
     }
 
+    /// ADMIN ONLY
+    /// Sets rewards to be distributed to the fee vault depositors. The full `reward_amount` will be
+    /// transferred to the vault to be distributed to the users until the `expiration` timestamp.
+    ///
+    /// ### Arguments
+    /// * `e` - The environment object
+    /// * `token` - The address of the reward token
+    /// * `reward_amount` - The amount of rewards to distribute
+    /// * `expiration` - The timestamp when the rewards expire
+    pub fn set_rewards(e: Env, token: Address, reward_amount: i128, expiration: u64) {
+        storage::extend_instance(&e);
+        let admin = storage::get_admin(&e);
+        admin.require_auth();
+
+        let vault = storage::get_vault_data(&e);
+        rewards::set_rewards(
+            &e,
+            &admin,
+            vault.total_shares,
+            &token,
+            reward_amount,
+            expiration,
+        );
+
+        FeeVaultEvents::vault_rewards_set(&e, &admin, &token, reward_amount, expiration);
+    }
+
     //********** Read-Write ***********//
 
     /// Deposits tokens into the fee vault for a specific reserve. Requires the signer to sign
@@ -314,7 +361,6 @@ impl FeeVault {
     /// * `i128` - The number of shares minted for the user
     ///
     /// ### Panics
-    /// * `ReserveNotFound` - If the reserve does not have a vault
     /// * `InvalidAmount` - If the amount is less than or equal to 0
     /// * `InvalidBTokensMinted` - If the amount of bTokens minted is less than or equal to 0
     /// * `InvalidSharesMinted` - If the amount of shares minted is less than or equal to 0
@@ -354,7 +400,6 @@ impl FeeVault {
     /// * `i128` - The number of shares burnt
     ///
     /// ### Panics
-    /// * `ReserveNotFound` - If the reserve does not have a vault
     /// * `InvalidAmount` - If the amount is less than or equal to 0
     /// * `BalanceError` - If the user does not have enough shares to withdraw the amount
     /// * `InvalidBTokensBurnt` - If the amount of bTokens burnt is less than or equal to 0
@@ -379,5 +424,30 @@ impl FeeVault {
             b_tokens_burnt,
         );
         burnt_shares
+    }
+
+    /// Claims rewards for the user from the fee vault.
+    ///
+    /// ### Arguments
+    /// * `user` - The address of the user claiming rewards
+    /// * `reward_token` - The address of the reward token to claim
+    /// * `to` - The address to send the claimed rewards to
+    ///
+    /// ### Returns
+    /// * `i128` - The amount of rewards claimed
+    ///
+    /// ### Panics
+    /// * `NoRewardsConfigured` - If no rewards are configured for the token
+    pub fn claim_rewards(e: Env, user: Address, reward_token: Address, to: Address) -> i128 {
+        storage::extend_instance(&e);
+        user.require_auth();
+
+        let vault = storage::get_vault_data(&e);
+        let shares = storage::get_vault_shares(&e, &user);
+
+        let claimed_rewards = rewards::claim_rewards(&e, vault.total_shares, &user, shares, &to);
+
+        FeeVaultEvents::vault_rewards_claim(&e, &user, &reward_token, claimed_rewards);
+        claimed_rewards
     }
 }

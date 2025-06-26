@@ -10,6 +10,7 @@ pub mod contract;
 pub mod errors;
 pub mod events;
 pub mod pool;
+pub mod rewards;
 pub mod storage;
 pub mod validator;
 pub mod vault;
