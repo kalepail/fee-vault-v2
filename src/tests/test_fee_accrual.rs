@@ -179,7 +179,7 @@ fn test_fee_accrual() {
     /*
      * Cause a bunch of accruals to verify fees are charged correctly.
      *
-     * -> Cause a b_rate update on the pool every day for 100 days
+     * -> Cause a b_rate update on the pool every day for 365 days
      * -> For USDC, accrued to fee vault daily.
      * -> For XLM, accrued to fee vault ~monthly.
      * -> Verify fee's charged for each reserve are approximately the same
@@ -505,9 +505,8 @@ fn test_fee_accrual_capped_rate() {
     /*
      * Cause a bunch of accruals to verify fees are charged correctly.
      *
-     * -> Cause a b_rate update on the pool every day for 100 days
-     * -> For USDC, accrued to fee vault daily.
-     * -> For XLM, accrued to fee vault ~monthly.
+     * -> Cause a b_rate update on the pool every day for 365 days
+     * -> Accrue to fee vaults daily
      * -> Verify fee's charged for each reserve are approximately the same
      */
     usdc_client.mint(&gandalf, &1000_0000000);
@@ -786,6 +785,11 @@ fn test_fee_accrual_fixed_rate() {
     fee_vault_xlm_client.deposit(&frodo, &starting_balance);
     fee_vault_xlm_client.deposit(&samwise, &starting_balance);
 
+    // add admin balance to XLM fee vault since it will be under target
+    let xlm_starting_admin_balance = 10_0000000;
+    xlm_client.mint(&bombadil, &xlm_starting_admin_balance);
+    fee_vault_xlm_client.admin_deposit(&xlm_starting_admin_balance);
+
     // deposit into xlm reserve
     xlm_client.mint(&merry, &merry_starting_balance);
     pool_client.submit(
@@ -821,9 +825,7 @@ fn test_fee_accrual_fixed_rate() {
     /*
      * Cause a bunch of accruals to verify fees are charged correctly.
      *
-     * -> Cause a b_rate update on the pool every day for 100 days
-     * -> For USDC, accrued to fee vault daily.
-     * -> For XLM, accrued to fee vault ~monthly.
+     * -> Cause a b_rate update on the pool every day for 365 days
      * -> Verify fee's charged for each reserve are approximately the same
      */
     usdc_client.mint(&gandalf, &1000_0000000);
@@ -961,23 +963,23 @@ fn test_fee_accrual_fixed_rate() {
         0_0100000,
     );
 
-    // admin pays in supplemental funds in XLM
-    xlm_client.mint(&bombadil, &starting_balance);
-    let pre_deposit_xlm = xlm_client.balance(&bombadil);
-    // converted to positive number
-    let admin_xlm_supplement = xlm_vault
+    // admin claims remaining XLM. Need to take into account the interest earned by the admin on their initial
+    // deposit, which is ~4% compounded daily, or 10 * 0.04080849 = 0.4080849 XLM
+    let pre_claim_xlm = xlm_client.balance(&bombadil);
+    let admin_xlm_balance = xlm_vault
         .admin_balance
-        .fixed_mul_ceil(xlm_vault.b_rate, SCALAR_12)
-        .unwrap_optimized()
-        * -1;
-    fee_vault_xlm_client.admin_deposit(&admin_xlm_supplement);
+        .fixed_mul_floor(xlm_vault.b_rate, SCALAR_12)
+        .unwrap_optimized();
+    let admin_xlm_supplement = xlm_starting_admin_balance + 4080849 - admin_xlm_balance;
+    assert!(admin_xlm_supplement > 0);
+    fee_vault_xlm_client.admin_withdraw(&admin_xlm_balance);
     assert_eq!(
         xlm_client.balance(&bombadil),
-        pre_deposit_xlm - admin_xlm_supplement
+        pre_claim_xlm + admin_xlm_balance
     );
 
     // -> verify only dust leftover in fee vault
-    let post_admin_xlm_vault = fee_vault_usdc_client.get_vault();
+    let post_admin_xlm_vault = fee_vault_xlm_client.get_vault();
     assert!(post_admin_xlm_vault.admin_balance < 10 && post_admin_xlm_vault.admin_balance > -10);
 
     // verify merry profit is approximately equal to total vault profit net the supplement
