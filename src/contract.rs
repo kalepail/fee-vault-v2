@@ -7,7 +7,7 @@ use crate::{
     vault::{self, VaultData},
 };
 
-use soroban_sdk::{contract, contractimpl, unwrap::UnwrapOptimized, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 
 #[contract]
 pub struct FeeVault;
@@ -171,9 +171,9 @@ impl FeeVault {
     /// Get the current reward token for the fee vault
     ///
     /// ### Returns
-    /// * `Address` - The address of the reward token`
-    pub fn get_reward_token(e: Env) -> Address {
-        storage::get_reward_token(&e).unwrap_optimized()
+    /// * `Option<Address>` - The address of the reward token, or None if no reward token is set
+    pub fn get_reward_token(e: Env) -> Option<Address> {
+        storage::get_reward_token(&e)
     }
 
     /// Get the reward data for a specific token
