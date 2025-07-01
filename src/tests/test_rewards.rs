@@ -140,6 +140,22 @@ fn test_rewards() {
     // -> skip half the reward period
     e.jump_time(xlm_reward_period / 2);
 
+    // -> validate `get_vault_summary` and `get_reward_data` return updated values for the rewards
+    let vault_summary = fee_vault_client.get_vault_summary();
+    let updated_reward_data = fee_vault_client.get_reward_data(&xlm).unwrap();
+    assert_eq!(vault_summary.reward_token, Some(xlm.clone()));
+    assert_eq!(vault_summary.reward_data.eps, reward_data.eps);
+    assert!(vault_summary.reward_data.index > 0);
+    assert_eq!(vault_summary.reward_data.last_time, e.ledger().timestamp());
+    assert_eq!(vault_summary.reward_data.expiration, reward_data.expiration);
+
+    assert_eq!(updated_reward_data.eps, reward_data.eps);
+    assert!(updated_reward_data.index > 0);
+    assert_eq!(updated_reward_data.last_time, e.ledger().timestamp());
+    assert_eq!(updated_reward_data.expiration, reward_data.expiration);
+
+    assert_eq!(updated_reward_data.index, vault_summary.reward_data.index);
+
     // -> samwise deposits ~200 USDC into the fee vault
     // -> use double frodo's balance to remove interest rate effects
     let samwise_deposit = fee_vault_client.get_underlying_tokens(&frodo) * 2;

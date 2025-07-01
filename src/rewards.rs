@@ -139,10 +139,21 @@ pub fn set_rewards(
     storage::set_reward_token(e, reward_token);
 }
 
-/***** Helper Functions *****/
-
-/// Update the vault rewards index for vault shares
-fn update_reward_data(e: &Env, reward_token: &Address, total_shares: i128) -> Option<RewardData> {
+/// Load an updated reward data for the given reward token.
+///
+/// This does NOT write the updated reward data to storage.
+///
+/// ### Arguments
+/// * `reward_token` - The address of the reward token
+/// * `total_shares` - The total number of shares in the vault
+///
+/// ### Returns
+/// * `Option<RewardData>` - The updated reward data if it exists
+pub fn load_updated_reward_data(
+    e: &Env,
+    reward_token: &Address,
+    total_shares: i128,
+) -> Option<RewardData> {
     match storage::get_reward_data(e, reward_token) {
         Some(reward_data) => {
             if reward_data.last_time >= reward_data.expiration
@@ -170,9 +181,20 @@ fn update_reward_data(e: &Env, reward_token: &Address, total_shares: i128) -> Op
                 index: additional_idx + reward_data.index,
                 last_time: e.ledger().timestamp(),
             };
-
-            storage::set_reward_data(e, reward_token, &new_data);
             Some(new_data)
+        }
+        None => return None, // no reward exist, no update is required
+    }
+}
+
+/***** Helper Functions *****/
+
+/// Update the vault rewards index for vault shares
+fn update_reward_data(e: &Env, reward_token: &Address, total_shares: i128) -> Option<RewardData> {
+    match load_updated_reward_data(e, reward_token, total_shares) {
+        Some(reward_data) => {
+            storage::set_reward_data(e, &reward_token, &reward_data);
+            Some(reward_data)
         }
         None => return None, // no reward exist, no update is required
     }
@@ -181,7 +203,7 @@ fn update_reward_data(e: &Env, reward_token: &Address, total_shares: i128) -> Op
 /// Update the user's rewards. If `to_claim` is true, the user's accrued rewards will be returned and
 /// a value of zero will be stored to the ledger.
 ///
-/// ### Arguments
+/// ### Arguments d
 /// * `token` - The address of the reward token
 /// * `reward_data` - The current reward data for the token
 /// * `user` - The address of the user

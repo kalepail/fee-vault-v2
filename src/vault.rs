@@ -9,6 +9,7 @@ use crate::{
 use soroban_fixed_point_math::{i128, FixedPoint};
 use soroban_sdk::{contracttype, panic_with_error, unwrap::UnwrapOptimized, Address, Env};
 
+#[derive(Clone)]
 #[contracttype]
 pub struct VaultData {
     /// The timestamp of the last update

@@ -4,7 +4,8 @@ use soroban_sdk::{contracttype, Address, Env};
 
 use crate::{
     constants::{SCALAR_12, SCALAR_7},
-    storage::{self, Fee},
+    rewards::load_updated_reward_data,
+    storage::{self, Fee, RewardData},
     vault::{self, VaultData},
 };
 
@@ -15,6 +16,7 @@ use crate::{
  * about the vault. It is not intended to be used for onchain logic.
  */
 
+#[derive(Clone)]
 #[contracttype]
 pub struct VaultSummary {
     // The pool address
@@ -31,6 +33,11 @@ pub struct VaultSummary {
     pub vault: VaultData,
     // The estimate APR earned by suppliers to the vault
     pub est_apr: i128,
+    // The reward token address, if any
+    pub reward_token: Option<Address>,
+    // The reward data for the reward_token, if any.
+    // If none, the data contains all zeros due to Soroban option limitations
+    pub reward_data: RewardData,
 }
 
 impl VaultSummary {
@@ -42,6 +49,13 @@ impl VaultSummary {
         let signer = storage::get_signer(e);
         let fee = storage::get_fee(e);
         let vault = vault::get_vault_updated(e, &pool, &asset);
+
+        let reward_token = storage::get_reward_token(e);
+        let reward_data = if let Some(unwrapped_r_token) = reward_token.clone() {
+            load_updated_reward_data(e, &unwrapped_r_token, vault.total_shares)
+        } else {
+            None
+        };
 
         let reserve = PoolClient::new(e, &pool).get_reserve(&asset);
         let pool_config = PoolClient::new(e, &pool).get_config();
@@ -136,6 +150,13 @@ impl VaultSummary {
             fee,
             vault,
             est_apr,
+            reward_token,
+            reward_data: reward_data.unwrap_or(RewardData {
+                expiration: 0,
+                eps: 0,
+                last_time: 0,
+                index: 0,
+            }),
         }
     }
 }
@@ -228,6 +249,11 @@ mod tests {
             assert_eq!(summary.vault.b_rate, 1_500_000_000_000);
             assert_eq!(summary.vault.last_update_timestamp, e.ledger().timestamp());
             assert_eq!(summary.vault.admin_balance, 0);
+            assert!(summary.reward_token.is_none());
+            assert_eq!(summary.reward_data.eps, 0);
+            assert_eq!(summary.reward_data.index, 0);
+            assert_eq!(summary.reward_data.last_time, 0);
+            assert_eq!(summary.reward_data.expiration, 0);
             // 0.325 * 0.85 * (1 - 0.1) * (1 - 0.1)
             assert_approx_eq_abs(summary.est_apr, 0_2237625, 0_0001000);
         });

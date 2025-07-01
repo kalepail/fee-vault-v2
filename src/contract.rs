@@ -1,8 +1,9 @@
 use crate::{
     errors::FeeVaultError,
     events::FeeVaultEvents,
-    pool, rewards,
-    storage::{self, RewardData},
+    pool,
+    rewards::{self, load_updated_reward_data},
+    storage::{self, RewardData, UserRewards},
     summary::VaultSummary,
     validator::{require_positive, require_valid_fee},
     vault::{self, VaultData},
@@ -116,6 +117,21 @@ impl FeeVault {
         }
     }
 
+    /// Fetch a user's rewards for a specific token. Does not update the user's rewards.
+    ///
+    /// If the current claimable rewards is needed, it is recommended to simulate a claim
+    /// call to get the current claimable rewards.
+    ///
+    /// ### Arguments
+    /// * `user` - The address of the user
+    /// * `token` - The address of the reward token
+    ///
+    /// ### Returns
+    /// * `Option<UserRewards>` - The user's rewards for the token, or None
+    pub fn get_rewards(e: Env, user: Address, token: Address) -> Option<UserRewards> {
+        storage::get_user_rewards(&e, &user, &token)
+    }
+
     /// Fetch the admin balance in underlying tokens
     ///
     /// ### Returns
@@ -185,14 +201,15 @@ impl FeeVault {
     /// ### Returns
     /// * `Option<RewardData>` - The reward data for the token, or None if no data exists
     pub fn get_reward_data(e: Env, token: Address) -> Option<RewardData> {
-        storage::get_reward_data(&e, &token)
+        let vault = storage::get_vault_data(&e);
+        load_updated_reward_data(&e, &token, vault.total_shares)
     }
 
     /// NOT INTENDED FOR CONTRACT USE
     ///
     /// Get the vault summary, which includes the pool, asset, admin, signer, fee, vault data,
-    /// and estimated APR for vault suppliers. Intended for use by dApps looking to fetch
-    /// display data.
+    /// rewards, and estimated APR for vault suppliers. Intended for use by dApps looking
+    /// to fetch display data.
     ///
     /// ### Returns
     /// * `VaultSummary` - The summary of the vault
@@ -343,6 +360,9 @@ impl FeeVault {
     /// * `token` - The address of the reward token
     /// * `reward_amount` - The amount of rewards to distribute
     /// * `expiration` - The timestamp when the rewards expire
+    ///
+    /// ### Panics
+    /// * `InvalidRewardConfig` - If the reward token cannot be changed, or if a valid reward period cannot be started
     pub fn set_rewards(e: Env, token: Address, reward_amount: i128, expiration: u64) {
         storage::extend_instance(&e);
         let admin = storage::get_admin(&e);
