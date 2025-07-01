@@ -245,13 +245,14 @@ pub fn withdraw(
     let share_amount = vault.b_tokens_to_shares_up(b_tokens_amount);
     require_positive(e, share_amount, FeeVaultError::InvalidSharesBurnt);
 
+    if share_amount > user_shares {
+        panic_with_error!(e, FeeVaultError::BalanceError);
+    }
+
     if vault.total_shares < share_amount || vault.total_b_tokens < b_tokens_amount {
         panic_with_error!(e, FeeVaultError::InsufficientReserves);
     }
 
-    if share_amount > user_shares {
-        panic_with_error!(e, FeeVaultError::BalanceError);
-    }
     vault.total_shares -= share_amount;
     vault.total_b_tokens -= b_tokens_amount;
 
@@ -700,7 +701,7 @@ mod generic_tests {
             };
             storage::set_vault_data(&e, &vault_data);
 
-            storage::set_vault_shares(&e, &samwise, vault_data.total_shares);
+            storage::set_vault_shares(&e, &samwise, vault_data.total_shares + 10);
             let withdraw_amount = vault_data.b_tokens_to_underlying_down(1000_0000000);
 
             withdraw(&e, &pool, &asset, &samwise, withdraw_amount + 1);

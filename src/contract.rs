@@ -267,7 +267,7 @@ impl FeeVault {
     }
 
     /// ADMIN ONLY
-    /// Deposit tokens into the valut in the admin balance
+    /// Deposit tokens into the vault's admin balance
     ///
     /// ### Arguments
     /// * `amount` - The amount of tokens to deposit
