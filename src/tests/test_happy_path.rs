@@ -2,7 +2,7 @@
 
 use crate::constants::SCALAR_7;
 use crate::storage::ONE_DAY_LEDGERS;
-use crate::testutils::{create_blend_pool, register_fee_vault, EnvTestUtils};
+use crate::testutils::{assert_approx_eq_abs, create_blend_pool, register_fee_vault, EnvTestUtils};
 use crate::FeeVaultClient;
 use blend_contract_sdk::pool::{Client as PoolClient, Request};
 use blend_contract_sdk::testutils::BlendFixture;
@@ -283,6 +283,24 @@ fn test_happy_path() {
      * Allow 1 week to pass
      */
     e.jump(ONE_DAY_LEDGERS * 7);
+
+    // check vault summary
+    let vault_summary = fee_vault_client.get_vault_summary();
+    assert_eq!(vault_summary.pool, pool);
+    assert_eq!(vault_summary.asset, usdc);
+    assert_eq!(vault_summary.admin, gandalf);
+    assert_eq!(vault_summary.signer, Some(bombadil.clone()));
+    assert_eq!(vault_summary.fee.rate_type, 0);
+    assert_eq!(vault_summary.fee.rate, 100_0000);
+    let frodo_shares = fee_vault_client.get_shares(&frodo);
+    let samwise_shares = fee_vault_client.get_shares(&samwise);
+    assert_eq!(
+        vault_summary.vault.total_shares,
+        frodo_shares + samwise_shares
+    );
+    assert!(vault_summary.vault.admin_balance > 0);
+    // 5% pool supply rate with 10% vault fee (within 0.1% of 4.5%)
+    assert_approx_eq_abs(vault_summary.est_apr, 0_0450000, 0_0010000);
 
     /*
      * Withdraw from pool

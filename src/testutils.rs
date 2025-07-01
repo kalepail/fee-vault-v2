@@ -247,7 +247,13 @@ pub mod mockpool {
 
     use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
+    use crate::constants::SCALAR_7;
+
     const BRATE: Symbol = symbol_short!("b_rate");
+    const CONFIG: Symbol = symbol_short!("config");
+    const DATA: Symbol = symbol_short!("data");
+    const BACKSTOP_RATE: Symbol = symbol_short!("backstop");
+
     #[derive(Clone, Debug)]
     #[contracttype]
     pub struct Reserve {
@@ -287,34 +293,96 @@ pub mod mockpool {
         pub last_time: u64, // the last block the data was updated
     }
 
+    #[derive(Clone, Debug)]
+    #[contracttype]
+    pub struct PoolConfig {
+        pub oracle: Address,      // the contract address of the oracle
+        pub min_collateral: i128, // the minimum amount of collateral required to open a liability position
+        pub bstop_rate: u32, // the rate the backstop takes on accrued debt interest, expressed in 7 decimals
+        pub status: u32,     // the status of the pool
+        pub max_positions: u32, // the maximum number of effective positions a single user can hold, and the max assets an auction can contain
+    }
+
     #[contract]
     pub struct MockPool;
 
     #[contractimpl]
     impl MockPool {
-        pub fn __constructor(e: Env, b_rate: i128) {
-            e.storage().instance().set(&BRATE, &b_rate);
-        }
-
+        /// Set the reserve b_rate. This overrides any set reserve data.
         pub fn set_b_rate(e: Env, b_rate: i128) {
             e.storage().instance().set(&BRATE, &b_rate);
         }
 
-        /// Note: We're only interested in the `b_rate`
+        /// Set the backstop rate
+        pub fn set_backstop_rate(e: Env, bstop_rate: u32) {
+            e.storage().instance().set(&BACKSTOP_RATE, &bstop_rate);
+        }
+
+        /// Set the reserve data. Clears any set b_rate
+        pub fn set_data(e: Env, data: ReserveData) {
+            if e.storage().instance().has(&BRATE) {
+                e.storage().instance().remove(&BRATE);
+            }
+            e.storage().instance().set(&DATA, &data);
+        }
+
+        /// Set the reserve config
+        pub fn set_config(e: Env, config: ReserveConfig) {
+            e.storage().instance().set(&CONFIG, &config);
+        }
+
+        /// Note: All functionality only cares about the b_rate, except the vault summary.
         pub fn get_reserve(e: Env, reserve: Address) -> Reserve {
-            let mut r_data = ReserveData::default();
-            r_data.b_rate = e.storage().instance().get(&BRATE).unwrap_or(0);
+            let mut r_data = e
+                .storage()
+                .instance()
+                .get(&DATA)
+                .unwrap_or(ReserveData::default());
+            if let Some(b_rate) = e.storage().instance().get(&BRATE) {
+                r_data.b_rate = b_rate;
+            }
             Reserve {
                 asset: reserve,
-                config: ReserveConfig::default(),
+                config: e
+                    .storage()
+                    .instance()
+                    .get(&CONFIG)
+                    .unwrap_or(ReserveConfig::default()),
                 data: r_data,
-                scalar: 0,
+                scalar: SCALAR_7,
+            }
+        }
+
+        /// Note: We are only interested in the bstop_rate.
+        pub fn get_config(e: Env) -> PoolConfig {
+            PoolConfig {
+                oracle: e.current_contract_address(),
+                min_collateral: 0,
+                bstop_rate: e.storage().instance().get(&BACKSTOP_RATE).unwrap_or(0),
+                status: 0,
+                max_positions: 4,
             }
         }
     }
 
     pub fn register_mock_pool_with_b_rate(e: &Env, b_rate: i128) -> MockPoolClient {
-        let pool_address = e.register(MockPool {}, (b_rate,));
-        MockPoolClient::new(e, &pool_address)
+        let pool_address = e.register(MockPool {}, ());
+        let client = MockPoolClient::new(e, &pool_address);
+        client.set_b_rate(&b_rate);
+        client
+    }
+
+    pub fn register_mock_pool_with_config_and_data(
+        e: &Env,
+        bstop_rate: u32,
+        config: ReserveConfig,
+        data: ReserveData,
+    ) -> MockPoolClient {
+        let pool_address = e.register(MockPool {}, ());
+        let client = MockPoolClient::new(e, &pool_address);
+        client.set_backstop_rate(&bstop_rate);
+        client.set_config(&config);
+        client.set_data(&data);
+        client
     }
 }

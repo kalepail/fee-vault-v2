@@ -3,6 +3,7 @@ use crate::{
     events::FeeVaultEvents,
     pool, rewards,
     storage::{self, RewardData},
+    summary::VaultSummary,
     validator::{require_positive, require_valid_fee},
     vault::{self, VaultData},
 };
@@ -185,6 +186,18 @@ impl FeeVault {
     /// * `Option<RewardData>` - The reward data for the token, or None if no data exists
     pub fn get_reward_data(e: Env, token: Address) -> Option<RewardData> {
         storage::get_reward_data(&e, &token)
+    }
+
+    /// NOT INTENDED FOR CONTRACT USE
+    ///
+    /// Get the vault summary, which includes the pool, asset, admin, signer, fee, vault data,
+    /// and estimated APR for vault suppliers. Intended for use by dApps looking to fetch
+    /// display data.
+    ///
+    /// ### Returns
+    /// * `VaultSummary` - The summary of the vault
+    pub fn get_vault_summary(e: Env) -> VaultSummary {
+        VaultSummary::load(&e)
     }
 
     //********** Read-Write Admin Only ***********//
