@@ -81,7 +81,7 @@ impl FeeVaultEvents {
         b_tokens: i128,
     ) {
         let topics = (
-            Symbol::new(&e, "vault_admin_deposit"),
+            Symbol::new(&e, "vault_admin_withdraw"),
             pool.clone(),
             reserve.clone(),
             admin.clone(),
@@ -91,8 +91,8 @@ impl FeeVaultEvents {
 
     /// Emitted when emissions are claimed
     ///
-    /// - topics - `["vault_emissions_claim", admin: Address]`
-    /// - data - `amount: i128`
+    /// - topics - `["vault_emissions_claim", pool: Address, admin: Address]`
+    /// - data - `[reserve_token_ids: i128, amount: i128]`
     pub fn vault_emissions_claim(
         e: &Env,
         admin: &Address,
@@ -140,13 +140,13 @@ impl FeeVaultEvents {
     /// Emitted when a user claims rewards from the vault
     ///
     /// - topics - `["vault_rewards_claim", user: Address, token: Address]`
-    /// - data - `[amount: i128]`
+    /// - data - `amount: i128`
     pub fn vault_rewards_claim(e: &Env, user: &Address, token: &Address, amount: i128) {
         let topics = (
             Symbol::new(&e, "vault_rewards_claim"),
             user.clone(),
             token.clone(),
         );
-        e.events().publish(topics, (amount,));
+        e.events().publish(topics, amount);
     }
 }

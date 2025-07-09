@@ -513,13 +513,13 @@ fn test_set_signer() {
         assert_eq!(storage::get_signer(&e), Some(merry.clone()));
     });
 
-    vault_client.set_signer(&frodo);
+    vault_client.set_signer(&Some(frodo.clone()));
 
     let authorized_function = AuthorizedInvocation {
         function: AuthorizedFunction::Contract((
             vault_address.clone(),
             Symbol::new(&e, "set_signer"),
-            vec![&e, frodo.into_val(&e)],
+            vec![&e, Some(frodo.clone()).into_val(&e)],
         )),
         sub_invocations: std::vec![],
     };
@@ -535,5 +535,25 @@ fn test_set_signer() {
     e.as_contract(&vault_address, || {
         // The new signer is frodo
         assert_eq!(storage::get_signer(&e), Some(frodo.clone()));
+    });
+
+    // validate signer removal
+    vault_client.set_signer(&None);
+    let authorized_function = AuthorizedInvocation {
+        function: AuthorizedFunction::Contract((
+            vault_address.clone(),
+            Symbol::new(&e, "set_signer"),
+            vec![&e, None::<Address>.into_val(&e)],
+        )),
+        sub_invocations: std::vec![],
+    };
+    assert_eq!(
+        e.auths(),
+        std::vec![(samwise.clone(), authorized_function.clone()),]
+    );
+
+    e.as_contract(&vault_address, || {
+        // The new signer is None
+        assert_eq!(storage::get_signer(&e), None);
     });
 }

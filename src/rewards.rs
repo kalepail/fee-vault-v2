@@ -232,7 +232,7 @@ fn update_user_rewards(
             }
             return set_user_rewards(e, token, user, reward_data.index, accrual, to_claim);
         }
-        // no accrual occured and no claim requested
+        // no accrual occurred and no claim requested
         return 0;
     } else if user_shares == 0 {
         // first time the user registered an action since rewards were added

@@ -53,7 +53,7 @@ pub fn withdraw(e: &Env, pool: &Address, reserve: &Address, to: &Address, amount
 ///
 /// ### Arguments
 /// * `pool` - The pool address
-/// * `reserve` - The reserve address
+/// * `reserve_token_ids` - The reserve token IDs to claim emissions for
 /// * `to` - The address to send the emissions to
 ///
 /// ### Returns

@@ -105,7 +105,7 @@ impl VaultData {
                 // 2 - fixed rate - admin either earns or supplements the vault to ensure the vault earns the target rate
                 //
                 // Both rate types calculate the difference in `b_tokens` the vault has vs the target rate. This is done by finding the
-                // expected `b_rate` needed to acheived the target rate over the update period, and then determining
+                // expected `b_rate` needed to achieved the target rate over the update period, and then determining
                 // the `b_tokens` needed to make up the difference between the current `b_rate` and the target `b_rate`.
                 //
                 // However, capped rates do not get supplemented by the admin, so `admin_b_tokens` can't be negative, while
@@ -136,11 +136,11 @@ impl VaultData {
                 if b_token_diff <= 0 && fee.rate_type == 1 {
                     // capped rate - no fees if the target rate wasn't reached
                     0
-                } else if -b_token_diff > self.admin_balance {
-                    // fixed rate - the requested b_tokens from the admin exceeds their balance. To prevent
-                    // any scenario where user's aren't able to withdraw their funds, the admin only pays what they have available
-                    // otherwise the vault acts as a capped rate when the admin balance is zero.
-                    -self.admin_balance
+                } else if b_token_diff <= 0 && self.admin_balance + b_token_diff < 0 {
+                    // fixed rate - the negative b_token_diff exceeds the admin balance. To prevent any scenario
+                    // where users aren't able to withdraw their funds, the admin only pays what they have available.
+                    // The vault acts as a capped rate when the admin balance is zero, or negative.
+                    (-self.admin_balance).min(0i128) // if the admin balance is negative, return 0 to prevent fees
                 } else {
                     b_token_diff
                 }
@@ -2224,6 +2224,124 @@ mod fixed_rate_tests {
             assert_eq!(vault_data.b_rate, new_b_rate);
             assert_eq!(vault_data.last_update_timestamp, e.ledger().timestamp());
             assert_eq!(vault_data.total_b_tokens, init_b_supply);
+        });
+    }
+
+    #[test]
+    fn test_update_rate_below_target_negative_admin_balance() {
+        // this test state should never be reached, but should be handled gracefully (like a capped rate vault)
+        let e = Env::default();
+        e.mock_all_auths();
+        e.set_default_info();
+
+        let init_admin_balance = -269_828;
+        let init_b_rate = 1_000_000_000_000;
+        let init_b_supply = 1000_0000000;
+        let bombadil = Address::generate(&e);
+        let (vault_address, pool, asset) =
+            create_test_fee_vault(&e, &bombadil, 2, 0_0500000, Some(init_b_rate));
+
+        let mock_client = MockPoolClient::new(&e, &pool);
+
+        e.as_contract(&vault_address, || {
+            let mut vault_data = VaultData {
+                total_b_tokens: init_b_supply,
+                last_update_timestamp: e.ledger().timestamp(),
+                total_shares: 1200_0000000,
+                b_rate: init_b_rate,
+                admin_balance: init_admin_balance,
+            };
+
+            let underlying_value_before =
+                vault_data.b_tokens_to_underlying_down(vault_data.total_b_tokens);
+
+            // approx 3.65% APR over 1 day
+            let new_b_rate = 1_000_100_000_000;
+            update_b_rate_and_time(&e, &mock_client, new_b_rate, 86400);
+
+            vault_data.update_rate(&e, &pool, &asset);
+
+            let underlying_value_after =
+                vault_data.b_tokens_to_underlying_down(vault_data.total_b_tokens);
+            // 0.000_100_000 = 0.0365 * 1 / 365
+            assert_approx_eq_abs(
+                underlying_value_after,
+                underlying_value_before + underlying_value_before * 100_000 / 1_000_000_000,
+                10,
+            );
+
+            // no b_token fees applied when below target
+            assert_eq!(vault_data.admin_balance, init_admin_balance);
+            assert_eq!(vault_data.total_shares, 1200_000_0000);
+            assert_eq!(vault_data.b_rate, new_b_rate);
+            assert_eq!(vault_data.last_update_timestamp, e.ledger().timestamp());
+            assert_eq!(vault_data.total_b_tokens, init_b_supply);
+        });
+    }
+
+    #[test]
+    fn test_update_rate_over_target_negative_admin_balance() {
+        let e = Env::default();
+        e.mock_all_auths();
+        e.set_default_info();
+
+        let init_admin_balance = -10_0000000;
+        let init_b_rate = 1_000_000_000_000;
+        let init_b_supply = 1000_0000000;
+        let bombadil = Address::generate(&e);
+        let (vault_address, pool, asset) =
+            create_test_fee_vault(&e, &bombadil, 2, 0_0500000, Some(init_b_rate));
+
+        let mock_client = MockPoolClient::new(&e, &pool);
+
+        e.as_contract(&vault_address, || {
+            let mut vault_data = VaultData {
+                total_b_tokens: init_b_supply,
+                last_update_timestamp: e.ledger().timestamp(),
+                total_shares: 1200_0000000,
+                b_rate: init_b_rate,
+                admin_balance: init_admin_balance,
+            };
+
+            let underlying_value_before =
+                vault_data.b_tokens_to_underlying_down(vault_data.total_b_tokens);
+
+            // approx 10.95% APR over 1 day
+            let new_b_rate = 1_000_300_000_000;
+            update_b_rate_and_time(&e, &mock_client, new_b_rate, 86400);
+
+            vault_data.update_rate(&e, &pool, &asset);
+
+            let underlying_value_after =
+                vault_data.b_tokens_to_underlying_down(vault_data.total_b_tokens);
+            // 0.000_136_986 = 0.05 * 1 / 365
+            assert_approx_eq_abs(
+                underlying_value_after,
+                underlying_value_before + underlying_value_before * 136_986 / 1_000_000_000,
+                10,
+            );
+
+            let admin_balance_delta = vault_data.admin_balance - init_admin_balance;
+            let underlying_admin_delta =
+                vault_data.b_tokens_to_underlying_down(admin_balance_delta);
+            // 0.000_163_013 = 0.0595 * 1 / 365
+            assert_approx_eq_abs(
+                underlying_admin_delta,
+                underlying_value_before * 163_013 / 1_000_000_000,
+                10,
+            );
+
+            assert_eq!(
+                vault_data.admin_balance,
+                init_admin_balance + admin_balance_delta
+            );
+            assert_eq!(vault_data.total_shares, 1200_000_0000);
+            assert_eq!(vault_data.b_rate, new_b_rate);
+            assert_eq!(vault_data.last_update_timestamp, e.ledger().timestamp());
+            assert_eq!(
+                vault_data.total_b_tokens,
+                init_b_supply - admin_balance_delta
+            );
         });
     }
 }

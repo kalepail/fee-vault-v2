@@ -25,7 +25,7 @@ impl FeeVault {
     /// * `rate_type` - The rate type the vault will use
     ///     * 0 = take rate (admin earns a percentage of the vault's earnings)
     ///     * 1 = capped rate (vault earns at most the APR cap, with any additional returns going to the admin)
-    ///     * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplmenting or earning the difference)
+    ///     * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplementing or earning the difference)
     /// * `rate` - The rate value, with 7 decimals (e.g. 1000000 for 10%)
     /// * `signer`- The signer address if the vault is permissioned, None otherwise
     ///
@@ -224,11 +224,15 @@ impl FeeVault {
     ///
     /// ### Arguments
     /// * `e` - The environment object
-    /// * `is_apr_capped` - Whether the vault will be APR capped
-    /// * `value` - The APR cap if `is_apr_capped`, the admin take_rate otherwise
+    /// * `rate_type` - The rate type the vault will use
+    ///     * 0 = take rate (admin earns a percentage of the vault's earnings)
+    ///     * 1 = capped rate (vault earns at most the APR cap, with any additional returns going to the admin)
+    ///     * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplementing or earning the difference)
+    /// * `rate` - The rate value, with 7 decimals (e.g. 1000000 for 10%)
     ///
     /// ### Panics
-    /// * `InvalidFeeModeValue` - If the value is not within 0 and 1_000_0000
+    /// * `InvalidFeeRate` - If the value is not within 0 and 1_000_0000
+    /// * `InvalidFeeRateType` - If the rate type is not 0, 1, or 2
     pub fn set_fee(e: Env, rate_type: u32, rate: u32) {
         storage::extend_instance(&e);
         storage::get_admin(&e).require_auth();
@@ -248,7 +252,8 @@ impl FeeVault {
     }
 
     /// ADMIN ONLY
-    /// Sets the admin address for the fee vault
+    /// Sets the admin address for the fee vault. Requires a signature from both the current admin
+    /// and the new admin address.
     ///
     /// ### Arguments
     /// * `e` - The environment object
@@ -262,16 +267,22 @@ impl FeeVault {
 
     /// ADMIN ONLY
     /// Sets the signer for the fee vault. This address is required to sign
-    /// all user deposits into the fee vault.
+    /// all user deposits into the fee vault. Requires a signature from both the current admin
+    /// and the new signer address.
+    ///
+    /// Passing `None` as the signer will remove the signer requirement for deposits.
     ///
     /// ### Arguments
-    /// * `e` - The environment object
     /// * `signer` - The new signer address to set
-    pub fn set_signer(e: Env, signer: Address) {
+    pub fn set_signer(e: Env, signer: Option<Address>) {
         storage::extend_instance(&e);
         storage::get_admin(&e).require_auth();
-        signer.require_auth();
-        storage::set_signer(&e, signer);
+        if let Some(signer_addr) = signer {
+            signer_addr.require_auth();
+            storage::set_signer(&e, signer_addr);
+        } else {
+            storage::del_signer(&e);
+        }
     }
 
     /// ADMIN ONLY
@@ -306,8 +317,9 @@ impl FeeVault {
     /// * `i128` - The number of b_tokens minted
     ///
     /// ### Panics
-    /// * `ReserveNotFound` - If the reserve does not have a vault
-    /// * `InsufficientAccruedFees` - If there are no fees to claim
+    /// * `InvalidAmount` - If the amount is less than or equal to 0
+    /// * `InvalidBTokensMinted` - If the amount of bTokens minted is less than or equal to 0
+    /// * `BalanceError` - If the user does not have enough tokens
     pub fn admin_deposit(e: Env, amount: i128) -> i128 {
         storage::extend_instance(&e);
         let admin = storage::get_admin(&e);
@@ -356,13 +368,13 @@ impl FeeVault {
     /// transferred to the vault to be distributed to the users until the `expiration` timestamp.
     ///
     /// ### Arguments
-    /// * `e` - The environment object
     /// * `token` - The address of the reward token
     /// * `reward_amount` - The amount of rewards to distribute
     /// * `expiration` - The timestamp when the rewards expire
     ///
     /// ### Panics
     /// * `InvalidRewardConfig` - If the reward token cannot be changed, or if a valid reward period cannot be started
+    /// * `BalanceError` - If the admin does not have enough tokens to set the rewards
     pub fn set_rewards(e: Env, token: Address, reward_amount: i128, expiration: u64) {
         storage::extend_instance(&e);
         let admin = storage::get_admin(&e);
@@ -384,7 +396,7 @@ impl FeeVault {
     //********** Read-Write ***********//
 
     /// Deposits tokens into the fee vault for a specific reserve. Requires the signer to sign
-    /// the tranasction if the signer is set.
+    /// the transaction if the signer is set.
     ///
     /// ### Arguments
     /// * `user` - The address of the user making the deposit
@@ -397,6 +409,7 @@ impl FeeVault {
     /// * `InvalidAmount` - If the amount is less than or equal to 0
     /// * `InvalidBTokensMinted` - If the amount of bTokens minted is less than or equal to 0
     /// * `InvalidSharesMinted` - If the amount of shares minted is less than or equal to 0
+    /// * `BalanceError` - If the user does not have enough tokens
     pub fn deposit(e: Env, user: Address, amount: i128) -> i128 {
         storage::extend_instance(&e);
         user.require_auth();

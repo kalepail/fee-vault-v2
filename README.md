@@ -26,7 +26,7 @@ If the calculated interest earned over the update period is below the capped rat
 
 ### Fixed Rate
 
-A fixed rate fee vault works the same as a capped rate fee vault when the interest rate is above the fixed rate, but will attempt to supplement the users gains if the calculated iterest rate over the interaction period is below the fixed rate.
+A fixed rate fee vault works the same as a capped rate fee vault when the interest rate is above the fixed rate, but will attempt to supplement the users gains if the calculated interest rate over the interaction period is below the fixed rate.
 
 If the admin does not maintain a positive `admin_balance`, the vault users will not be supplemented. That is, a fixed rate fee vault will only supplement users yield with existing `b_tokens` in the `admin_balance`.
 
@@ -48,7 +48,7 @@ The contracts are initialized through the `__constructor`.
     /// * `rate_type` - The rate type the vault will use
     ///     * 0 = take rate (admin earns a percentage of the vault's earnings)
     ///     * 1 = capped rate (vault earns at most the APR cap, with any additional returns going to the admin)
-    ///     * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplmenting or earning the difference)
+    ///     * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplementing or earning the difference)
     /// * `rate` - The rate value, with 7 decimals (e.g. 1000000 for 10%)
     /// * `signer`- The signer address if the vault is permissioned, None otherwise
     ///
@@ -72,7 +72,7 @@ To integrate the fee vault into your app or protocol, you will just need to have
 
 ```rust
     /// Deposits tokens into the fee vault for a specific reserve. Requires the signer to sign
-    /// the tranasction if the signer is set.
+    /// the transaction if the signer is set.
     ///
     /// ### Arguments
     /// * `user` - The address of the user making the deposit
@@ -85,6 +85,7 @@ To integrate the fee vault into your app or protocol, you will just need to have
     /// * `InvalidAmount` - If the amount is less than or equal to 0
     /// * `InvalidBTokensMinted` - If the amount of bTokens minted is less than or equal to 0
     /// * `InvalidSharesMinted` - If the amount of shares minted is less than or equal to 0
+    /// * `BalanceError` - If the user does not have enough tokens
     pub fn deposit(e: Env, user: Address, amount: i128) -> i128
 ```
 
@@ -121,7 +122,7 @@ You can display to users their current underlying asset balance using the `get_u
     pub fn get_underlying_tokens(e: Env, user: Address) -> i128
 ```
 
-You can dispaly general vault information, including the Blend pool, supported asset, rewards info, and the estimated APR users will earn using the `get_vault_summary` function.
+You can display general vault information, including the Blend pool, supported asset, rewards info, and the estimated APR users will earn using the `get_vault_summary` function.
 
 ```rust
     /// NOT INTENDED FOR CONTRACT USE
@@ -147,13 +148,13 @@ To setup rewards, the admin can invoke the `set_rewards` function. Note that if 
     /// transferred to the vault to be distributed to the users until the `expiration` timestamp.
     ///
     /// ### Arguments
-    /// * `e` - The environment object
     /// * `token` - The address of the reward token
     /// * `reward_amount` - The amount of rewards to distribute
     /// * `expiration` - The timestamp when the rewards expire
-    ///  
+    ///
     /// ### Panics
     /// * `InvalidRewardConfig` - If the reward token cannot be changed, or if a valid reward period cannot be started
+    /// * `BalanceError` - If the admin does not have enough tokens to set the rewards
     pub fn set_rewards(e: Env, token: Address, reward_amount: i128, expiration: u64)
 ```
 
@@ -234,8 +235,9 @@ To deposit additional funds into the admin balance, often used when the vault is
     /// * `i128` - The number of b_tokens minted
     ///
     /// ### Panics
-    /// * `ReserveNotFound` - If the reserve does not have a vault
-    /// * `InsufficientAccruedFees` - If there are no fees to claim
+    /// * `InvalidAmount` - If the amount is less than or equal to 0
+    /// * `InvalidBTokensMinted` - If the amount of bTokens minted is less than or equal to 0
+    /// * `BalanceError` - If the user does not have enough tokens
     pub fn admin_deposit(e: Env, amount: i128) -> i128
 ```
 

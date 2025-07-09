@@ -26,7 +26,7 @@ pub struct Fee {
     /// The vault's fee mode
     /// * 0 = take rate (admin earns a percentage of the vault's earnings)
     /// * 1 = capped rate (vault earns at most the APR cap, with any additional returns going to the admin)
-    /// * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplmenting or earning the difference)
+    /// * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplementing or earning the difference)
     pub rate_type: u32,
     /// The vault's fee rate, with 7 decimals (e.g. 1000000 = 10%)
     pub rate: u32,
@@ -149,11 +149,18 @@ pub fn get_signer(e: &Env) -> Option<Address> {
         .get::<Symbol, Address>(&Symbol::new(e, SIGNER_KEY))
 }
 
-/// Set the signer address. If set, cannot be returned to None.
+/// Set the signer address.
 pub fn set_signer(e: &Env, signer: Address) {
     e.storage()
         .instance()
         .set::<Symbol, Address>(&Symbol::new(e, SIGNER_KEY), &signer);
+}
+
+/// Delete the signer address.
+pub fn del_signer(e: &Env) {
+    e.storage()
+        .instance()
+        .remove::<Symbol>(&Symbol::new(e, SIGNER_KEY));
 }
 
 /// Get the reward token address. Can be None if no reward has been set.

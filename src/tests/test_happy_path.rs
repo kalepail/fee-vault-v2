@@ -169,7 +169,7 @@ fn test_happy_path() {
     );
 
     // gandalf to set bombadil as signer
-    fee_vault_client.set_signer(&bombadil);
+    fee_vault_client.set_signer(&Some(bombadil.clone()));
 
     fee_vault_client.deposit(&samwise, &starting_balance);
     // -> verify deposit auth with signer
