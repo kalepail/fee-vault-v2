@@ -2,12 +2,14 @@ use crate::{
     errors::FeeVaultError,
     events::FeeVaultEvents,
     pool,
-    reserve_vault::{self, ReserveVault},
-    storage,
-    validator::{require_has_reserve, require_positive},
+    rewards::{self, load_updated_reward_data},
+    storage::{self, RewardData, UserRewards},
+    summary::VaultSummary,
+    validator::{require_positive, require_valid_fee},
+    vault::{self, VaultData},
 };
 
-use soroban_sdk::{contract, contractimpl, panic_with_error, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 
 #[contract]
 pub struct FeeVault;
@@ -18,25 +20,47 @@ impl FeeVault {
     ///
     /// ### Arguments
     /// * `admin` - The admin address
-    /// * `pool` - The blend pool address
-    /// * `is_apr_capped` - Whether the vault will be APR capped
-    /// * `value` - The APR cap if `is_apr_capped`, the admin take_rate otherwise
+    /// * `pool` - The blend pool address the vault will deposit into
+    /// * `asset` - The asset address of the reserve the vault will support
+    /// * `rate_type` - The rate type the vault will use
+    ///     * 0 = take rate (admin earns a percentage of the vault's earnings)
+    ///     * 1 = capped rate (vault earns at most the APR cap, with any additional returns going to the admin)
+    ///     * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplementing or earning the difference)
+    /// * `rate` - The rate value, with 7 decimals (e.g. 1000000 for 10%)
+    /// * `signer`- The signer address if the vault is permissioned, None otherwise
     ///
     /// ### Panics
-    /// * `InvalidFeeModeValue` - If the value is not within 0 and 1_000_0000
-    pub fn __constructor(e: Env, admin: Address, pool: Address, is_apr_capped: bool, value: i128) {
+    /// * `InvalidFeeRate` - If the value is not within 0 and 1_000_0000
+    /// * `InvalidFeeRateType` - If the rate type is not 0, 1, or 2
+    pub fn __constructor(
+        e: Env,
+        admin: Address,
+        pool: Address,
+        asset: Address,
+        rate_type: u32,
+        rate: u32,
+        signer: Option<Address>,
+    ) {
         admin.require_auth();
-        if value < 0 || value > 1_000_0000 {
-            panic_with_error!(&e, FeeVaultError::InvalidFeeModeValue);
-        }
 
         storage::set_admin(&e, admin);
-        storage::set_pool(&e, pool);
-        storage::set_fee_mode(
+        storage::set_pool(&e, pool.clone());
+        storage::set_asset(&e, asset.clone());
+
+        let fee = storage::Fee { rate_type, rate };
+        require_valid_fee(&e, &fee);
+        storage::set_fee(&e, fee);
+        if let Some(signer) = signer {
+            storage::set_signer(&e, signer);
+        }
+        storage::set_vault_data(
             &e,
-            storage::FeeMode {
-                is_apr_capped,
-                value,
+            &VaultData {
+                b_rate: pool::reserve_b_rate(&e, &pool, &asset),
+                last_update_timestamp: e.ledger().timestamp(),
+                total_shares: 0,
+                total_b_tokens: 0,
+                admin_balance: 0,
             },
         );
     }
@@ -46,28 +70,27 @@ impl FeeVault {
     /// Fetch a user's position in shares
     ///
     /// ### Arguments
-    /// * `reserve` - The asset address of the reserve
     /// * `user` - The address of the user
     ///
     /// ### Returns
-    /// * `i128` - The user's position in shares, or 0 if the reserve does not have a vault or the
-    ///            user has no shares
-    pub fn get_shares(e: Env, reserve: Address, user: Address) -> i128 {
-        storage::get_reserve_vault_shares(&e, &reserve, &user)
+    /// * `i128` - The user's position in shares, or the user has no shares
+    pub fn get_shares(e: Env, user: Address) -> i128 {
+        storage::get_vault_shares(&e, &user)
     }
 
     /// Fetch a user's position in bTokens
     ///
     /// ### Arguments
-    /// * `reserve` - The asset address of the reserve
     /// * `user` - The address of the user
     ///
     /// ### Returns
     /// * `i128` - The user's position in bTokens, or 0 if they have no bTokens
-    pub fn get_b_tokens(e: Env, reserve: Address, user: Address) -> i128 {
-        let shares = storage::get_reserve_vault_shares(&e, &reserve, &user);
+    pub fn get_b_tokens(e: Env, user: Address) -> i128 {
+        let shares = storage::get_vault_shares(&e, &user);
         if shares > 0 {
-            let vault = reserve_vault::get_reserve_vault_updated(&e, &reserve);
+            let pool = storage::get_pool(&e);
+            let asset = storage::get_asset(&e);
+            let vault = vault::get_vault_updated(&e, &pool, &asset);
             vault.shares_to_b_tokens_down(shares)
         } else {
             0
@@ -77,15 +100,16 @@ impl FeeVault {
     /// Fetch a user's position in underlying tokens
     ///
     /// ### Arguments
-    /// * `reserve` - The asset address of the reserve
     /// * `user` - The address of the user
     ///
     /// ### Returns
     /// * `i128` - The user's position in underlying tokens, or 0 if they have no shares
-    pub fn get_underlying_tokens(e: Env, reserve: Address, user: Address) -> i128 {
-        let shares = storage::get_reserve_vault_shares(&e, &reserve, &user);
+    pub fn get_underlying_tokens(e: Env, user: Address) -> i128 {
+        let shares = storage::get_vault_shares(&e, &user);
         if shares > 0 {
-            let vault = reserve_vault::get_reserve_vault_updated(&e, &reserve);
+            let pool = storage::get_pool(&e);
+            let asset = storage::get_asset(&e);
+            let vault = vault::get_vault_updated(&e, &pool, &asset);
             let b_tokens = vault.shares_to_b_tokens_down(shares);
             vault.b_tokens_to_underlying_down(b_tokens)
         } else {
@@ -93,42 +117,104 @@ impl FeeVault {
         }
     }
 
-    /// Fetch the accrued fees in underlying tokens
+    /// Fetch a user's rewards for a specific token. Does not update the user's rewards.
+    ///
+    /// If the current claimable rewards is needed, it is recommended to simulate a claim
+    /// call to get the current claimable rewards.
     ///
     /// ### Arguments
-    /// * `reserve` - The asset address of the reserve
+    /// * `user` - The address of the user
+    /// * `token` - The address of the reward token
+    ///
+    /// ### Returns
+    /// * `Option<UserRewards>` - The user's rewards for the token, or None
+    pub fn get_rewards(e: Env, user: Address, token: Address) -> Option<UserRewards> {
+        storage::get_user_rewards(&e, &user, &token)
+    }
+
+    /// Fetch the admin balance in underlying tokens
     ///
     /// ### Returns
     /// * `i128` - The admin's accrued fees in underlying tokens, or 0 if the reserve does not exist
-    pub fn get_collected_fees(e: Env, reserve: Address) -> i128 {
-        if storage::has_reserve_vault(&e, &reserve) {
-            let vault = reserve_vault::get_reserve_vault_updated(&e, &reserve);
-            vault.b_tokens_to_underlying_down(vault.accrued_fees)
-        } else {
-            0
-        }
+    pub fn get_underlying_admin_balance(e: Env) -> i128 {
+        let pool = storage::get_pool(&e);
+        let asset = storage::get_asset(&e);
+        let vault = vault::get_vault_updated(&e, &pool, &asset);
+        vault.b_tokens_to_underlying_down(vault.admin_balance)
     }
 
-    /// Get the blend pool address
+    /// Get the vault's blend pool it deposits into and the asset it supports.
     ///
     /// ### Returns
-    /// * `Address` - The blend pool address
-    pub fn get_pool(e: Env) -> Address {
-        storage::get_pool(&e)
+    /// * `(Address, Address)` - (The blend pool address, the asset address)
+    pub fn get_config(e: Env) -> (Address, Address) {
+        (storage::get_pool(&e), storage::get_asset(&e))
     }
 
-    /// Get the reserve vault data
+    /// Get the vault data
+    ///
+    /// ### Returns
+    /// * `VaultData` - The vault data
+    pub fn get_vault(e: Env) -> VaultData {
+        let pool = storage::get_pool(&e);
+        let asset = storage::get_asset(&e);
+        vault::get_vault_updated(&e, &pool, &asset)
+    }
+
+    /// Get the vault's fee configuration
+    ///
+    /// ### Returns
+    /// * `Fee` - The fee configuration for the vault
+    pub fn get_fee(e: Env) -> storage::Fee {
+        storage::get_fee(&e)
+    }
+
+    /// Get the vault's admin
+    ///
+    /// ### Returns
+    /// * `Address` - The admin address for the vault
+    pub fn get_admin(e: Env) -> Address {
+        storage::get_admin(&e)
+    }
+
+    /// Get the vault's signer
+    ///
+    /// ### Returns
+    /// * `Option<Address>` - The signer address for the vault, or None if no signer is set
+    pub fn get_signer(e: Env) -> Option<Address> {
+        storage::get_signer(&e)
+    }
+
+    /// Get the current reward token for the fee vault
+    ///
+    /// ### Returns
+    /// * `Option<Address>` - The address of the reward token, or None if no reward token is set
+    pub fn get_reward_token(e: Env) -> Option<Address> {
+        storage::get_reward_token(&e)
+    }
+
+    /// Get the reward data for a specific token
     ///
     /// ### Arguments
-    /// * `reserve` - The asset address of the reserve
+    /// * `token` - The address of the reward token
     ///
     /// ### Returns
-    /// * `ReserveData` - The reserve data
+    /// * `Option<RewardData>` - The reward data for the token, or None if no data exists
+    pub fn get_reward_data(e: Env, token: Address) -> Option<RewardData> {
+        let vault = storage::get_vault_data(&e);
+        load_updated_reward_data(&e, &token, vault.total_shares)
+    }
+
+    /// NOT INTENDED FOR CONTRACT USE
     ///
-    /// ### Panics
-    /// * `ReserveNotFound` - If the reserve does not exist
-    pub fn get_reserve_vault(e: Env, reserve: Address) -> ReserveVault {
-        reserve_vault::get_reserve_vault_updated(&e, &reserve)
+    /// Get the vault summary, which includes the pool, asset, admin, signer, fee, vault data,
+    /// rewards, and estimated APR for vault suppliers. Intended for use by dApps looking
+    /// to fetch display data.
+    ///
+    /// ### Returns
+    /// * `VaultSummary` - The summary of the vault
+    pub fn get_vault_summary(e: Env) -> VaultSummary {
+        VaultSummary::load(&e)
     }
 
     //********** Read-Write Admin Only ***********//
@@ -138,34 +224,36 @@ impl FeeVault {
     ///
     /// ### Arguments
     /// * `e` - The environment object
-    /// * `is_apr_capped` - Whether the vault will be APR capped
-    /// * `value` - The APR cap if `is_apr_capped`, the admin take_rate otherwise
+    /// * `rate_type` - The rate type the vault will use
+    ///     * 0 = take rate (admin earns a percentage of the vault's earnings)
+    ///     * 1 = capped rate (vault earns at most the APR cap, with any additional returns going to the admin)
+    ///     * 2 = fixed rate (vault always earns the fixed rate, with the admin either supplementing or earning the difference)
+    /// * `rate` - The rate value, with 7 decimals (e.g. 1000000 for 10%)
     ///
     /// ### Panics
-    /// * `InvalidFeeModeValue` - If the value is not within 0 and 1_000_0000
-    pub fn set_fee_mode(e: Env, is_apr_capped: bool, value: i128) {
+    /// * `InvalidFeeRate` - If the value is not within 0 and 1_000_0000
+    /// * `InvalidFeeRateType` - If the rate type is not 0, 1, or 2
+    pub fn set_fee(e: Env, rate_type: u32, rate: u32) {
         storage::extend_instance(&e);
         storage::get_admin(&e).require_auth();
-        if value < 0 || value > 1_000_0000 {
-            panic_with_error!(&e, FeeVaultError::InvalidFeeModeValue);
-        }
 
-        // Accrue interest for all reserves prior to updating the fee-mode, to avoid any retroactive effect
-        reserve_vault::accrue_interest_for_all_reserves(&e);
+        let fee = storage::Fee { rate_type, rate };
+        require_valid_fee(&e, &fee);
 
-        storage::set_fee_mode(
-            &e,
-            storage::FeeMode {
-                is_apr_capped,
-                value,
-            },
-        );
+        // Accrue interest prior to updating the fee-mode, to avoid any retroactive effect
+        let pool = storage::get_pool(&e);
+        let asset = storage::get_asset(&e);
+        let vault = vault::get_vault_updated(&e, &pool, &asset);
+        storage::set_vault_data(&e, &vault);
 
-        FeeVaultEvents::fee_mode_updated(&e, is_apr_capped, value);
+        storage::set_fee(&e, fee);
+
+        FeeVaultEvents::fee_update(&e, rate_type, rate);
     }
 
     /// ADMIN ONLY
-    /// Sets the admin address for the fee vault
+    /// Sets the admin address for the fee vault. Requires a signature from both the current admin
+    /// and the new admin address.
     ///
     /// ### Arguments
     /// * `e` - The environment object
@@ -178,34 +266,22 @@ impl FeeVault {
     }
 
     /// ADMIN ONLY
-    /// Add a new reserve vault
+    /// Sets the signer for the fee vault. This address is required to sign
+    /// all user deposits into the fee vault. Requires a signature from both the current admin
+    /// and the new signer address.
+    ///
+    /// Passing `None` as the signer will remove the signer requirement for deposits.
     ///
     /// ### Arguments
-    /// * `reserve_address` - The address of the reserve to add
-    ///
-    /// ### Panics
-    /// * `ReserveAlreadyExists` - If the reserve already has a vault
-    pub fn add_reserve_vault(e: Env, reserve_address: Address) {
+    /// * `signer` - The new signer address to set
+    pub fn set_signer(e: Env, signer: Option<Address>) {
         storage::extend_instance(&e);
         storage::get_admin(&e).require_auth();
-        if storage::has_reserve_vault(&e, &reserve_address) {
-            panic_with_error!(&e, FeeVaultError::ReserveAlreadyExists);
+        if let Some(signer_addr) = signer {
+            signer_addr.require_auth();
+            storage::set_signer(&e, signer_addr);
         } else {
-            storage::set_reserve_vault(
-                &e,
-                &reserve_address,
-                &ReserveVault {
-                    address: reserve_address.clone(),
-                    b_rate: pool::reserve_b_rate(&e, &reserve_address),
-                    last_update_timestamp: e.ledger().timestamp(),
-                    total_shares: 0,
-                    total_b_tokens: 0,
-                    accrued_fees: 0,
-                },
-            );
-
-            storage::add_reserve_to_reserves(&e, reserve_address.clone());
-            FeeVaultEvents::new_reserve_vault(&e, &reserve_address);
+            storage::del_signer(&e);
         }
     }
 
@@ -224,43 +300,105 @@ impl FeeVault {
         storage::extend_instance(&e);
         let admin = storage::get_admin(&e);
         admin.require_auth();
-        let emissions = pool::claim(&e, &reserve_token_ids, &to);
-        FeeVaultEvents::vault_emissions_claim(&e, &admin, reserve_token_ids, emissions);
+        let pool = storage::get_pool(&e);
+        let emissions = pool::claim(&e, &pool, &reserve_token_ids, &to);
+
+        FeeVaultEvents::vault_emissions_claim(&e, &pool, &admin, reserve_token_ids, emissions);
         emissions
     }
 
     /// ADMIN ONLY
-    /// Claims fees for the given reserves from the vault
+    /// Deposit tokens into the vault's admin balance
     ///
     /// ### Arguments
-    /// * `reserve` - The address of the reserve to claim fees for
-    /// * `to` - The address to send the fees to
+    /// * `amount` - The amount of tokens to deposit
+    ///
+    /// ### Returns
+    /// * `i128` - The number of b_tokens minted
+    ///
+    /// ### Panics
+    /// * `InvalidAmount` - If the amount is less than or equal to 0
+    /// * `InvalidBTokensMinted` - If the amount of bTokens minted is less than or equal to 0
+    /// * `BalanceError` - If the user does not have enough tokens
+    pub fn admin_deposit(e: Env, amount: i128) -> i128 {
+        storage::extend_instance(&e);
+        let admin = storage::get_admin(&e);
+        admin.require_auth();
+        require_positive(&e, amount, FeeVaultError::InvalidAmount);
+
+        let pool = storage::get_pool(&e);
+        let asset = storage::get_asset(&e);
+        pool::supply(&e, &pool, &asset, &admin, amount);
+        let b_tokens_minted = vault::admin_deposit(&e, &pool, &asset, amount);
+
+        FeeVaultEvents::vault_admin_deposit(&e, &pool, &asset, &admin, amount, b_tokens_minted);
+        b_tokens_minted
+    }
+
+    /// ADMIN ONLY
+    /// Withdraw tokens from the vault's admin balance
+    ///
+    /// ### Arguments
+    /// * `amount` - The amount of underlying tokens to withdraw
     ///
     /// ### Returns
     /// * `i128` - The number of b_tokens burnt
     ///
     /// ### Panics
-    /// * `ReserveNotFound` - If the reserve does not have a vault
-    /// * `InsufficientAccruedFees` - If there are no fees to claim
-    pub fn claim_fees(e: Env, reserve: Address, to: Address) -> i128 {
+    /// * `InvalidAmount` - If the amount is less than or equal to 0
+    /// * `BalanceError` - If the user does not have enough shares to withdraw the amount
+    /// * `InvalidBTokensBurnt` - If the amount of bTokens burnt is less than or equal to 0
+    pub fn admin_withdraw(e: Env, amount: i128) -> i128 {
         storage::extend_instance(&e);
         let admin = storage::get_admin(&e);
         admin.require_auth();
-        require_has_reserve(&e, &reserve);
+        require_positive(&e, amount, FeeVaultError::InvalidAmount);
 
-        let (b_tokens_burnt, amount) = reserve_vault::claim_fees(&e, &reserve);
-        pool::withdraw(&e, &reserve, &to, amount);
+        let pool = storage::get_pool(&e);
+        let asset = storage::get_asset(&e);
+        pool::withdraw(&e, &pool, &asset, &admin, amount);
+        let b_tokens_burnt = vault::admin_withdraw(&e, &pool, &asset, amount);
 
-        FeeVaultEvents::vault_fee_claim(&e, &reserve, &admin, amount, b_tokens_burnt);
+        FeeVaultEvents::vault_admin_withdraw(&e, &pool, &asset, &admin, amount, b_tokens_burnt);
         b_tokens_burnt
+    }
+
+    /// ADMIN ONLY
+    /// Sets rewards to be distributed to the fee vault depositors. The full `reward_amount` will be
+    /// transferred to the vault to be distributed to the users until the `expiration` timestamp.
+    ///
+    /// ### Arguments
+    /// * `token` - The address of the reward token
+    /// * `reward_amount` - The amount of rewards to distribute
+    /// * `expiration` - The timestamp when the rewards expire
+    ///
+    /// ### Panics
+    /// * `InvalidRewardConfig` - If the reward token cannot be changed, or if a valid reward period cannot be started
+    /// * `BalanceError` - If the admin does not have enough tokens to set the rewards
+    pub fn set_rewards(e: Env, token: Address, reward_amount: i128, expiration: u64) {
+        storage::extend_instance(&e);
+        let admin = storage::get_admin(&e);
+        admin.require_auth();
+
+        let vault = storage::get_vault_data(&e);
+        rewards::set_rewards(
+            &e,
+            &admin,
+            vault.total_shares,
+            &token,
+            reward_amount,
+            expiration,
+        );
+
+        FeeVaultEvents::vault_rewards_set(&e, &admin, &token, reward_amount, expiration);
     }
 
     //********** Read-Write ***********//
 
-    /// Deposits tokens into the fee vault for a specific reserve
+    /// Deposits tokens into the fee vault for a specific reserve. Requires the signer to sign
+    /// the transaction if the signer is set.
     ///
     /// ### Arguments
-    /// * `reserve` - The address of the reserve to deposit
     /// * `user` - The address of the user making the deposit
     /// * `amount` - The amount of tokens to deposit
     ///
@@ -268,27 +406,39 @@ impl FeeVault {
     /// * `i128` - The number of shares minted for the user
     ///
     /// ### Panics
-    /// * `ReserveNotFound` - If the reserve does not have a vault
     /// * `InvalidAmount` - If the amount is less than or equal to 0
     /// * `InvalidBTokensMinted` - If the amount of bTokens minted is less than or equal to 0
     /// * `InvalidSharesMinted` - If the amount of shares minted is less than or equal to 0
-    pub fn deposit(e: Env, reserve: Address, user: Address, amount: i128) -> i128 {
+    /// * `BalanceError` - If the user does not have enough tokens
+    pub fn deposit(e: Env, user: Address, amount: i128) -> i128 {
         storage::extend_instance(&e);
         user.require_auth();
-        require_has_reserve(&e, &reserve);
+        if let Some(signer) = storage::get_signer(&e) {
+            signer.require_auth();
+        }
+
         require_positive(&e, amount, FeeVaultError::InvalidAmount);
 
-        pool::supply(&e, &reserve, &user, amount);
-        let (b_tokens_minted, new_shares) = reserve_vault::deposit(&e, &reserve, &user, amount);
+        let pool = storage::get_pool(&e);
+        let asset = storage::get_asset(&e);
+        pool::supply(&e, &pool, &asset, &user, amount);
+        let (b_tokens_minted, new_shares) = vault::deposit(&e, &pool, &asset, &user, amount);
 
-        FeeVaultEvents::vault_deposit(&e, &reserve, &user, amount, new_shares, b_tokens_minted);
+        FeeVaultEvents::vault_deposit(
+            &e,
+            &pool,
+            &asset,
+            &user,
+            amount,
+            new_shares,
+            b_tokens_minted,
+        );
         new_shares
     }
 
     /// Withdraws tokens from the fee vault for a specific reserve
     ///
     /// ### Arguments
-    /// * `reserve` - The address of the reserve to withdraw
     /// * `user` - The address of the user making the withdrawal
     /// * `amount` - The amount of tokens to withdraw
     ///
@@ -296,21 +446,54 @@ impl FeeVault {
     /// * `i128` - The number of shares burnt
     ///
     /// ### Panics
-    /// * `ReserveNotFound` - If the reserve does not have a vault
     /// * `InvalidAmount` - If the amount is less than or equal to 0
     /// * `BalanceError` - If the user does not have enough shares to withdraw the amount
     /// * `InvalidBTokensBurnt` - If the amount of bTokens burnt is less than or equal to 0
     /// * `InsufficientReserves` - If the pool doesn't have enough reserves to complete the withdrawal
-    pub fn withdraw(e: Env, reserve: Address, user: Address, amount: i128) -> i128 {
+    pub fn withdraw(e: Env, user: Address, amount: i128) -> i128 {
         storage::extend_instance(&e);
         user.require_auth();
-        require_has_reserve(&e, &reserve);
         require_positive(&e, amount, FeeVaultError::InvalidAmount);
 
-        pool::withdraw(&e, &reserve, &user, amount);
-        let (b_tokens_burnt, burnt_shares) = reserve_vault::withdraw(&e, &reserve, &user, amount);
+        let pool = storage::get_pool(&e);
+        let asset = storage::get_asset(&e);
+        pool::withdraw(&e, &pool, &asset, &user, amount);
+        let (b_tokens_burnt, burnt_shares) = vault::withdraw(&e, &pool, &asset, &user, amount);
 
-        FeeVaultEvents::vault_withdraw(&e, &reserve, &user, amount, burnt_shares, b_tokens_burnt);
+        FeeVaultEvents::vault_withdraw(
+            &e,
+            &pool,
+            &asset,
+            &user,
+            amount,
+            burnt_shares,
+            b_tokens_burnt,
+        );
         burnt_shares
+    }
+
+    /// Claims rewards for the user from the fee vault.
+    ///
+    /// ### Arguments
+    /// * `user` - The address of the user claiming rewards
+    /// * `reward_token` - The address of the reward token to claim
+    /// * `to` - The address to send the claimed rewards to
+    ///
+    /// ### Returns
+    /// * `i128` - The amount of rewards claimed
+    ///
+    /// ### Panics
+    /// * `NoRewardsConfigured` - If no rewards are configured for the token
+    pub fn claim_rewards(e: Env, user: Address, reward_token: Address, to: Address) -> i128 {
+        storage::extend_instance(&e);
+        user.require_auth();
+
+        let vault = storage::get_vault_data(&e);
+        let shares = storage::get_vault_shares(&e, &user);
+
+        let claimed_rewards = rewards::claim_rewards(&e, vault.total_shares, &user, shares, &to);
+
+        FeeVaultEvents::vault_rewards_claim(&e, &user, &reward_token, claimed_rewards);
+        claimed_rewards
     }
 }

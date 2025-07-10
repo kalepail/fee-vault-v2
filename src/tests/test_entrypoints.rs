@@ -2,16 +2,11 @@
 
 use crate::{
     constants::SCALAR_12,
-    reserve_vault::ReserveVault,
     storage,
-    testutils::{
-        assert_approx_eq_rel, create_blend_pool, create_fee_vault, mockpool, register_fee_vault,
-        EnvTestUtils,
-    },
+    testutils::{assert_approx_eq_rel, mockpool, register_fee_vault, EnvTestUtils},
+    vault::VaultData,
     FeeVaultClient,
 };
-use blend_contract_sdk::testutils::BlendFixture;
-use sep_41_token::testutils::MockTokenClient;
 use soroban_fixed_point_math::FixedPoint;
 use soroban_sdk::{
     testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation},
@@ -23,19 +18,24 @@ use soroban_sdk::{
 fn test_constructor_ok() {
     let e = Env::default();
     e.mock_all_auths();
+
     let samwise = Address::generate(&e);
-    let blend_pool = Address::generate(&e);
-    let take_rate = 1_000_0000;
-    let is_apr_capped = false;
+    let frodo = Address::generate(&e);
+
+    let init_b_rate = 1_000_000_000_000;
+    let pool = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate).address;
+    let reserve = Address::generate(&e);
+    let rate: u32 = 1_000_0000;
+    let rate_type: u32 = 0;
 
     let vault_address = register_fee_vault(
         &e,
-        Some((
-            samwise.clone(),
-            blend_pool.clone(),
-            is_apr_capped,
-            take_rate,
-        )),
+        &samwise,
+        &pool,
+        &reserve,
+        rate_type,
+        rate,
+        Some(frodo.clone()),
     );
 
     assert_eq!(
@@ -49,9 +49,11 @@ fn test_constructor_ok() {
                     vec![
                         &e,
                         samwise.into_val(&e),
-                        blend_pool.into_val(&e),
-                        is_apr_capped.into_val(&e),
-                        take_rate.into_val(&e),
+                        pool.into_val(&e),
+                        reserve.into_val(&e),
+                        rate_type.into_val(&e),
+                        rate.into_val(&e),
+                        Some(frodo.clone()).into_val(&e),
                     ]
                 )),
                 sub_invocations: std::vec![]
@@ -60,67 +62,71 @@ fn test_constructor_ok() {
     );
 
     let client = FeeVaultClient::new(&e, &vault_address);
-    assert_eq!(client.get_pool(), blend_pool);
-
-    e.as_contract(&vault_address, || {
-        assert_eq!(storage::get_admin(&e), samwise);
-        assert_eq!(storage::get_pool(&e), blend_pool);
-        let fee_mode = storage::get_fee_mode(&e);
-        assert_eq!(fee_mode.is_apr_capped, is_apr_capped);
-        assert_eq!(fee_mode.value, take_rate);
-    });
+    assert_eq!(client.get_config(), (pool, reserve));
+    assert_eq!(client.get_admin(), samwise);
+    assert_eq!(client.get_signer(), Some(frodo));
+    let fee = client.get_fee();
+    assert_eq!(fee.rate_type, rate_type);
+    assert_eq!(fee.rate, rate);
+    let vault_data = client.get_vault();
+    assert_eq!(vault_data.total_b_tokens, 0);
+    assert_eq!(vault_data.total_shares, 0);
+    assert_eq!(vault_data.b_rate, init_b_rate);
+    assert_eq!(vault_data.last_update_timestamp, e.ledger().timestamp());
+    assert_eq!(vault_data.admin_balance, 0);
 }
 
 #[test]
 #[should_panic(expected = "Error(Context, InvalidAction)")]
-fn test_constructor_negative_take_rate() {
+fn test_constructor_invalid_rate() {
     let e = Env::default();
     e.mock_all_auths();
-    let samwise = Address::generate(&e);
-    // Note: This fails with `InvalidAction` during testing, rather than `InvalidTakeRate`
-    register_fee_vault(&e, Some((samwise.clone(), samwise.clone(), false, -1)));
-}
 
-#[test]
-#[should_panic(expected = "Error(Context, InvalidAction)")]
-fn test_constructor_negative_apr_cap() {
-    let e = Env::default();
-    e.mock_all_auths();
     let samwise = Address::generate(&e);
-    // Note: This fails with `InvalidAction` during testing, rather than `InvalidTakeRate`
-    register_fee_vault(&e, Some((samwise.clone(), samwise.clone(), true, -1999)));
-}
+    let frodo = Address::generate(&e);
 
-#[test]
-#[should_panic(expected = "Error(Context, InvalidAction)")]
-fn test_constructor_take_rate_over_max() {
-    let e = Env::default();
-    e.mock_all_auths();
-    let samwise = Address::generate(&e);
+    let init_b_rate = 1_000_000_000_000;
+    let pool = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate).address;
+    let reserve = Address::generate(&e);
+    let rate: u32 = 1_0000000 + 1;
+    let rate_type: u32 = 0;
 
     // Note: This fails with `InvalidAction` during testing, rather than `InvalidTakeRate`
     register_fee_vault(
         &e,
-        Some((samwise.clone(), samwise.clone(), false, 1_000_0001)),
+        &samwise,
+        &pool,
+        &reserve,
+        rate_type,
+        rate,
+        Some(frodo.clone()),
     );
 }
 
 #[test]
 #[should_panic(expected = "Error(Context, InvalidAction)")]
-fn test_constructor_apr_cap_over_max() {
+fn test_constructor_invalid_rate_type() {
     let e = Env::default();
     e.mock_all_auths();
+
     let samwise = Address::generate(&e);
+    let frodo = Address::generate(&e);
+
+    let init_b_rate = 1_000_000_000_000;
+    let pool = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate).address;
+    let reserve = Address::generate(&e);
+    let rate: u32 = 1_0000000 + 1;
+    let rate_type: u32 = 3;
 
     // Note: This fails with `InvalidAction` during testing, rather than `InvalidTakeRate`
     register_fee_vault(
         &e,
-        Some((
-            samwise.clone(),
-            samwise.clone(),
-            true,
-            170_141_183_460_469_231_731_687_303_715_884_105_727i128,
-        )),
+        &samwise,
+        &pool,
+        &reserve,
+        rate_type,
+        rate,
+        Some(frodo.clone()),
     );
 }
 
@@ -132,39 +138,33 @@ fn test_get_b_tokens() {
 
     let samwise = Address::generate(&e);
     let frodo = Address::generate(&e);
-    let reserve = Address::generate(&e);
+
     let init_b_rate = 1_000_000_000_000;
+    let pool = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate).address;
+    let reserve = Address::generate(&e);
+    let rate: u32 = 100_0000;
+    let rate_type: u32 = 0;
 
-    let mock_client = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate);
-    let vault_address = register_fee_vault(
-        &e,
-        Some((
-            samwise.clone(),
-            mock_client.address.clone(),
-            false,
-            0_1000000,
-        )),
-    );
-
+    let vault_address = register_fee_vault(&e, &samwise, &pool, &reserve, rate_type, rate, None);
     let vault_client = FeeVaultClient::new(&e, &vault_address);
+    let mock_client = mockpool::MockPoolClient::new(&e, &pool);
 
     e.as_contract(&vault_address, || {
-        let reserve_vault = ReserveVault {
-            address: reserve.clone(),
+        let vault_data = VaultData {
             total_b_tokens: 1000_0000000,
             total_shares: 1200_0000000,
             b_rate: init_b_rate,
             last_update_timestamp: e.ledger().timestamp(),
-            accrued_fees: 0,
+            admin_balance: 0,
         };
-        storage::set_reserve_vault(&e, &reserve, &reserve_vault);
+        storage::set_vault_data(&e, &vault_data);
 
         // samwise owns 10% of the pool, frodo owns 90%
-        storage::set_reserve_vault_shares(&e, &reserve, &samwise, 120_0000000);
-        storage::set_reserve_vault_shares(&e, &reserve, &frodo, 1080_0000000);
+        storage::set_vault_shares(&e, &samwise, 120_0000000);
+        storage::set_vault_shares(&e, &frodo, 1080_0000000);
     });
-    assert_eq!(vault_client.get_b_tokens(&reserve, &samwise), 100_0000000);
-    assert_eq!(vault_client.get_b_tokens(&reserve, &frodo), 900_0000000);
+    assert_eq!(vault_client.get_b_tokens(&samwise), 100_0000000);
+    assert_eq!(vault_client.get_b_tokens(&frodo), 900_0000000);
 
     // b_rate is increased by 10%. `take_rate` is 10%
     mock_client.set_b_rate(&1_100_000_000_000);
@@ -175,13 +175,13 @@ fn test_get_b_tokens() {
 
     // Ensure get_b_tokens always returns updated results, even though b_rate hasn't been updated
     assert_eq!(
-        vault_client.get_b_tokens(&reserve, &samwise),
+        vault_client.get_b_tokens(&samwise),
         expected_total_b_tokens
             .fixed_mul_floor(10, 100)
             .unwrap_optimized()
     );
     assert_eq!(
-        vault_client.get_b_tokens(&reserve, &frodo),
+        vault_client.get_b_tokens(&frodo),
         expected_total_b_tokens
             .fixed_mul_floor(90, 100)
             .unwrap_optimized()
@@ -189,25 +189,16 @@ fn test_get_b_tokens() {
 
     // The view function shouldn't mutate the state
     e.as_contract(&vault_address, || {
-        let reserve_vault = storage::get_reserve_vault(&e, &reserve);
-        assert_eq!(reserve_vault.accrued_fees, 0);
+        let reserve_vault = storage::get_vault_data(&e);
+        assert_eq!(reserve_vault.admin_balance, 0);
         assert_eq!(reserve_vault.total_b_tokens, 1000_0000000);
         assert_eq!(reserve_vault.total_shares, 1200_0000000);
         assert_eq!(reserve_vault.b_rate, 1_000_000_000_000);
     });
 
-    // Should return 0 if vault doesn't exist or user doesn't have any shares
-    let non_existent_reserve = Address::generate(&e);
+    // Should return 0 if user doesn't have any shares
     let non_existent_user = Address::generate(&e);
-    assert_eq!(
-        vault_client.get_b_tokens(&non_existent_reserve, &samwise),
-        0
-    );
-    assert_eq!(vault_client.get_b_tokens(&reserve, &non_existent_user), 0);
-    assert_eq!(
-        vault_client.get_b_tokens(&non_existent_reserve, &non_existent_user),
-        0
-    );
+    assert_eq!(vault_client.get_b_tokens(&non_existent_user), 0);
 }
 
 #[test]
@@ -218,40 +209,34 @@ fn test_underlying_wrappers() {
 
     let samwise = Address::generate(&e);
     let frodo = Address::generate(&e);
-    let reserve = Address::generate(&e);
+
     let init_b_rate = 1_000_000_000_000;
+    let pool = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate).address;
+    let reserve = Address::generate(&e);
+    let rate: u32 = 100_0000;
+    let rate_type: u32 = 0;
 
-    let mock_client = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate);
-    let vault_address = register_fee_vault(
-        &e,
-        Some((
-            samwise.clone(),
-            mock_client.address.clone(),
-            false,
-            0_1000000,
-        )),
-    );
-
+    let vault_address = register_fee_vault(&e, &samwise, &pool, &reserve, rate_type, rate, None);
     let vault_client = FeeVaultClient::new(&e, &vault_address);
+    let mock_client = mockpool::MockPoolClient::new(&e, &pool);
 
     e.as_contract(&vault_address, || {
-        let reserve_vault = ReserveVault {
-            address: reserve.clone(),
+        let vault_data = VaultData {
             total_b_tokens: 1000_0000000,
             total_shares: 1200_0000000,
             b_rate: init_b_rate,
             last_update_timestamp: e.ledger().timestamp(),
-            accrued_fees: 0,
+            admin_balance: 0,
         };
-        storage::set_reserve_vault(&e, &reserve, &reserve_vault);
+        storage::set_vault_data(&e, &vault_data);
         // samwise owns 10% of the pool, frodo owns 90%
-        storage::set_reserve_vault_shares(&e, &reserve, &samwise, 120_0000000);
-        storage::set_reserve_vault_shares(&e, &reserve, &frodo, 1080_0000000);
+        storage::set_vault_shares(&e, &samwise, 120_0000000);
+        storage::set_vault_shares(&e, &frodo, 1080_0000000);
     });
 
     let total_underlying_value = init_b_rate * 1000_0000000 / SCALAR_12;
-    let frodo_underlying = vault_client.get_underlying_tokens(&reserve, &frodo);
-    let samwise_underlying = vault_client.get_underlying_tokens(&reserve, &samwise);
+    let frodo_underlying = vault_client.get_underlying_tokens(&frodo);
+    let samwise_underlying = vault_client.get_underlying_tokens(&samwise);
 
     // Since frodo owns 90% of the pool and sam owns 10%, we expect that
     // frodo's underlying value will be 9x sam's, and their sum will be the total.
@@ -262,7 +247,7 @@ fn test_underlying_wrappers() {
     assert_eq!(frodo_underlying, 9 * samwise_underlying);
 
     // There are no accrued fees initially
-    assert_eq!(vault_client.get_collected_fees(&reserve), 0);
+    assert_eq!(vault_client.get_underlying_admin_balance(), 0);
 
     // Assume b_rate is increased by 10%. The wrappers should take that into account
     mock_client.set_b_rate(&1_100_000_000_000);
@@ -270,15 +255,15 @@ fn test_underlying_wrappers() {
 
     // Since the growth is 10%, and the take_rate is also 10%,
     // the total accrued fees value should be `initial underlying / 100`.
-    let accrued_fees_underlying = vault_client.get_collected_fees(&reserve);
+    let accrued_fees_underlying = vault_client.get_underlying_admin_balance();
     assert_approx_eq_rel(
         accrued_fees_underlying,
         total_underlying_value / 100,
         0_0000001,
     );
 
-    let sam_underlying_after = vault_client.get_underlying_tokens(&reserve, &samwise);
-    let frodo_underlying_after = vault_client.get_underlying_tokens(&reserve, &frodo);
+    let sam_underlying_after = vault_client.get_underlying_tokens(&samwise);
+    let frodo_underlying_after = vault_client.get_underlying_tokens(&frodo);
 
     // The new total underlying sum should be increased by 10%
     assert_approx_eq_rel(
@@ -294,23 +279,8 @@ fn test_underlying_wrappers() {
     assert_eq!(frodo_underlying_after, 9 * sam_underlying_after);
 
     // Ensure the view function never panic
-    // `get_underlying_tokens` should return 0 if the reserve or the user don't exist.
     let non_existent_user = Address::generate(&e);
-    let non_existent_reserve = Address::generate(&e);
-    assert_eq!(
-        vault_client.get_underlying_tokens(&non_existent_reserve, &frodo),
-        0
-    );
-    assert_eq!(
-        vault_client.get_underlying_tokens(&reserve, &non_existent_user),
-        0
-    );
-    assert_eq!(
-        vault_client.get_underlying_tokens(&non_existent_reserve, &non_existent_user),
-        0
-    );
-    // get_collected_fees should return 0 if the reserve doesn't exist
-    assert_eq!(vault_client.get_collected_fees(&non_existent_reserve), 0);
+    assert_eq!(vault_client.get_underlying_tokens(&non_existent_user), 0);
 }
 
 #[test]
@@ -320,29 +290,24 @@ fn test_set_fee_mode() {
 
     let samwise = Address::generate(&e);
 
-    let vault_address = register_fee_vault(
-        &e,
-        Some((samwise.clone(), Address::generate(&e), false, 0_1000000)),
-    );
+    let init_b_rate = 1_000_000_000_000;
+    let pool = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate).address;
+    let reserve = Address::generate(&e);
+    let rate: u32 = 1_000_0000;
+    let rate_type: u32 = 0;
+
+    let vault_address = register_fee_vault(&e, &samwise, &pool, &reserve, rate_type, rate, None);
     let vault_client = FeeVaultClient::new(&e, &vault_address);
 
     // value should be in range 0..1_000_0000
     assert_eq!(
-        vault_client.try_set_fee_mode(&false, &-1).err(),
-        Some(Ok(Error::from_contract_error(104)))
-    );
-    assert_eq!(
-        vault_client.try_set_fee_mode(&true, &-2).err(),
-        Some(Ok(Error::from_contract_error(104)))
-    );
-    assert_eq!(
-        vault_client.try_set_fee_mode(&true, &1_000_0001).err(),
+        vault_client.try_set_fee(&0, &1_000_0001).err(),
         Some(Ok(Error::from_contract_error(104)))
     );
 
     // Set take rate to 0.5
     let take_rate = 500_000;
-    vault_client.set_fee_mode(&false, &take_rate);
+    vault_client.set_fee(&1, &take_rate);
     assert_eq!(
         e.auths()[0],
         (
@@ -350,31 +315,31 @@ fn test_set_fee_mode() {
             AuthorizedInvocation {
                 function: AuthorizedFunction::Contract((
                     vault_address.clone(),
-                    Symbol::new(&e, "set_fee_mode"),
-                    vec![&e, false.into_val(&e), take_rate.into_val(&e),]
+                    Symbol::new(&e, "set_fee"),
+                    vec![&e, 1u32.into_val(&e), take_rate.into_val(&e),]
                 )),
                 sub_invocations: std::vec![]
             }
         )
     );
     e.as_contract(&vault_address, || {
-        let fee_mode = storage::get_fee_mode(&e);
-        assert_eq!(fee_mode.is_apr_capped, false);
-        assert_eq!(fee_mode.value, 500_000);
+        let fee = storage::get_fee(&e);
+        assert_eq!(fee.rate_type, 1);
+        assert_eq!(fee.rate, take_rate);
     });
     // Setting the value to 0 or 100% should be possible
-    vault_client.set_fee_mode(&true, &0);
+    vault_client.set_fee(&0, &0);
     e.as_contract(&vault_address, || {
-        let fee_mode = storage::get_fee_mode(&e);
-        assert_eq!(fee_mode.is_apr_capped, true);
-        assert_eq!(fee_mode.value, 0);
+        let fee = storage::get_fee(&e);
+        assert_eq!(fee.rate_type, 0);
+        assert_eq!(fee.rate, 0);
     });
 
-    vault_client.set_fee_mode(&false, &1_000_0000);
+    vault_client.set_fee(&1, &1_000_0000);
     e.as_contract(&vault_address, || {
-        let fee_mode = storage::get_fee_mode(&e);
-        assert_eq!(fee_mode.is_apr_capped, false);
-        assert_eq!(fee_mode.value, 1_000_0000);
+        let fee = storage::get_fee(&e);
+        assert_eq!(fee.rate_type, 1);
+        assert_eq!(fee.rate, 1_000_0000);
     });
 }
 
@@ -385,68 +350,35 @@ fn test_ensure_b_rate_gets_update_pre_fee_mode_update() {
     e.set_default_info();
 
     let samwise = Address::generate(&e);
-    let usdc = Address::generate(&e);
-    let xlm = Address::generate(&e);
+    let frodo = Address::generate(&e);
+
     let init_b_rate = 1_000_000_000_000;
+    let pool = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate).address;
+    let reserve = Address::generate(&e);
+    let rate: u32 = 100_0000;
+    let rate_type: u32 = 0;
 
-    let mock_client = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate);
-    let vault_address = register_fee_vault(
-        &e,
-        Some((
-            samwise.clone(),
-            mock_client.address.clone(),
-            false,
-            0_1000000,
-        )),
-    );
+    let vault_address = register_fee_vault(&e, &frodo, &pool, &reserve, rate_type, rate, None);
     let vault_client = FeeVaultClient::new(&e, &vault_address);
+    let mock_client = mockpool::MockPoolClient::new(&e, &pool);
 
-    // Add 2 reserves
-    vault_client.add_reserve_vault(&usdc);
-    vault_client.add_reserve_vault(&xlm);
     e.as_contract(&vault_address, || {
-        // Ensure both reserves where added and set the total_b_tokens manually
-        // to mock blend-interaction
-        assert_eq!(
-            storage::get_reserves(&e),
-            vec![&e, usdc.clone(), xlm.clone()]
-        );
-        assert!(storage::has_reserve_vault(&e, &usdc));
-        assert!(storage::has_reserve_vault(&e, &xlm));
-
-        storage::set_reserve_vault(
+        storage::set_vault_data(
             &e,
-            &usdc,
-            &ReserveVault {
-                address: usdc.clone(),
+            &VaultData {
                 total_b_tokens: 1000_0000000,
                 total_shares: 1200_0000000,
                 b_rate: init_b_rate,
                 last_update_timestamp: e.ledger().timestamp(),
-                accrued_fees: 0,
-            },
-        );
-
-        storage::set_reserve_vault(
-            &e,
-            &xlm,
-            &ReserveVault {
-                address: xlm.clone(),
-                total_b_tokens: 100_0000000,
-                total_shares: 100_0000000,
-                b_rate: init_b_rate,
-                last_update_timestamp: e.ledger().timestamp(),
-                accrued_fees: 0,
+                admin_balance: 0,
             },
         );
 
         // All the shares are owned by samwise for simplicity
-        storage::set_reserve_vault_shares(&e, &usdc, &samwise, 1200_0000000);
-        storage::set_reserve_vault_shares(&e, &xlm, &samwise, 100_0000000);
+        storage::set_vault_shares(&e, &samwise, 1200_0000000);
     });
 
-    let usdc_underlying_balance_before = vault_client.get_underlying_tokens(&usdc, &samwise);
-    let xlm_underlying_balance_before = vault_client.get_underlying_tokens(&xlm, &samwise);
+    let usdc_underlying_balance_before = vault_client.get_underlying_tokens(&samwise);
 
     // The pool has doubled in value, but interest hasn't been accrued yet
     let new_b_rate = 2_000_000_000_000;
@@ -455,46 +387,31 @@ fn test_ensure_b_rate_gets_update_pre_fee_mode_update() {
 
     // Ensure everything is still equal to the initial config pre fee-mode update
     e.as_contract(&vault_address, || {
-        let usdc_vault = storage::get_reserve_vault(&e, &usdc);
-        assert_eq!(usdc_vault.accrued_fees, 0);
-        assert_eq!(usdc_vault.b_rate, 1_000_000_000_000);
-        assert_ne!(usdc_vault.last_update_timestamp, e.ledger().timestamp());
-
-        let xlm_vault = storage::get_reserve_vault(&e, &xlm);
-        assert_eq!(xlm_vault.accrued_fees, 0);
-        assert_eq!(xlm_vault.b_rate, 1_000_000_000_000);
-        assert_ne!(xlm_vault.last_update_timestamp, e.ledger().timestamp());
+        let vault = storage::get_vault_data(&e);
+        assert_eq!(vault.admin_balance, 0);
+        assert_eq!(vault.b_rate, 1_000_000_000_000);
+        assert_ne!(vault.last_update_timestamp, e.ledger().timestamp());
     });
 
     // Admin tries to take advantage of that by setting the take_rate to 100% to claim all the fees.
-    vault_client.set_fee_mode(&false, &1_000_0000);
+    vault_client.set_fee(&0, &1_000_0000);
 
     // The previous action shouldn't affect any already accrued rewards
-    let usdc_underlying_balance_after = vault_client.get_underlying_tokens(&usdc, &samwise);
-    let xlm_underlying_balance_after = vault_client.get_underlying_tokens(&xlm, &samwise);
+    let usdc_underlying_balance_after = vault_client.get_underlying_tokens(&samwise);
 
     // The b_rate has doubled and the take_rate was 10%. So we expect 190% increase
     assert_eq!(
         usdc_underlying_balance_after,
         usdc_underlying_balance_before * 19 / 10
     );
-    assert_eq!(
-        xlm_underlying_balance_after,
-        xlm_underlying_balance_before * 19 / 10
-    );
 
     // Ensure the stored reserve vaults are also up to date
     e.as_contract(&vault_address, || {
-        let usdc_vault = storage::get_reserve_vault(&e, &usdc);
-        assert_eq!(usdc_vault.accrued_fees, 500000000);
+        let usdc_vault = storage::get_vault_data(&e);
+        assert_eq!(usdc_vault.admin_balance, 500000000);
         assert_eq!(usdc_vault.b_rate, new_b_rate);
         assert_eq!(usdc_vault.last_update_timestamp, e.ledger().timestamp());
         assert_eq!(usdc_vault.total_b_tokens, 1000_0000000 - 500000000);
-
-        let xlm_vault = storage::get_reserve_vault(&e, &xlm);
-        assert_eq!(xlm_vault.accrued_fees, 50000000);
-        assert_eq!(xlm_vault.b_rate, new_b_rate);
-        assert_eq!(xlm_vault.last_update_timestamp, e.ledger().timestamp());
     });
 }
 
@@ -506,10 +423,13 @@ fn test_set_admin() {
     let samwise = Address::generate(&e);
     let frodo = Address::generate(&e);
 
-    let vault_address = register_fee_vault(
-        &e,
-        Some((samwise.clone(), Address::generate(&e), true, 0_1000000)),
-    );
+    let init_b_rate = 1_000_000_000_000;
+    let pool = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate).address;
+    let reserve = Address::generate(&e);
+    let rate: u32 = 1_000_0000;
+    let rate_type: u32 = 0;
+
+    let vault_address = register_fee_vault(&e, &samwise, &pool, &reserve, rate_type, rate, None);
     let vault_client = FeeVaultClient::new(&e, &vault_address);
 
     e.as_contract(&vault_address, || {
@@ -563,112 +483,77 @@ fn test_set_admin() {
 }
 
 #[test]
-fn test_add_reserve_vault() {
+fn test_set_signer() {
     let e = Env::default();
     e.mock_all_auths();
 
     let samwise = Address::generate(&e);
-    let reserve = Address::generate(&e);
+    let frodo = Address::generate(&e);
+    let merry = Address::generate(&e);
 
-    let mock_client = mockpool::register_mock_pool_with_b_rate(&e, 1_100_000_000_000);
+    let init_b_rate = 1_000_000_000_000;
+    let pool = mockpool::register_mock_pool_with_b_rate(&e, init_b_rate).address;
+    let reserve = Address::generate(&e);
+    let rate: u32 = 1_000_0000;
+    let rate_type: u32 = 0;
+
     let vault_address = register_fee_vault(
         &e,
-        Some((
-            samwise.clone(),
-            mock_client.address.clone(),
-            false,
-            0_1000000,
-        )),
+        &samwise,
+        &pool,
+        &reserve,
+        rate_type,
+        rate,
+        Some(merry.clone()),
     );
-
-    e.as_contract(&vault_address, || {
-        // Initially the reserves should be empty
-        assert_eq!(storage::get_reserves(&e), vec![&e]);
-    });
-
     let vault_client = FeeVaultClient::new(&e, &vault_address);
 
-    // Trying to get the reserve vault before adding it should fail
-    assert_eq!(
-        vault_client.try_get_reserve_vault(&reserve).err(),
-        Some(Ok(Error::from_contract_error(100)))
-    );
-
-    vault_client.add_reserve_vault(&reserve);
-    assert_eq!(
-        e.auths()[0],
-        (
-            samwise.clone(),
-            AuthorizedInvocation {
-                function: AuthorizedFunction::Contract((
-                    vault_address.clone(),
-                    Symbol::new(&e, "add_reserve_vault"),
-                    vec![&e, reserve.into_val(&e),]
-                )),
-                sub_invocations: std::vec![]
-            }
-        )
-    );
-
-    let reserve_info = vault_client.get_reserve_vault(&reserve);
-
-    assert_eq!(reserve_info.address, reserve);
-    assert_eq!(reserve_info.total_b_tokens, 0);
-    assert_eq!(reserve_info.total_shares, 0);
-    // The init b_rate of the pool at the time of registering the vault was 1.1
-    assert_eq!(reserve_info.b_rate, 1_100_000_000_000);
-    assert_eq!(reserve_info.accrued_fees, 0);
-
     e.as_contract(&vault_address, || {
-        // The reserve should also be added to the reserves list
-        assert_eq!(storage::get_reserves(&e), vec![&e, reserve.clone()]);
+        // merry is the current signer
+        assert_eq!(storage::get_signer(&e), Some(merry.clone()));
     });
 
-    // Trying to add a vault for the same reserve should fail
+    vault_client.set_signer(&Some(frodo.clone()));
+
+    let authorized_function = AuthorizedInvocation {
+        function: AuthorizedFunction::Contract((
+            vault_address.clone(),
+            Symbol::new(&e, "set_signer"),
+            vec![&e, Some(frodo.clone()).into_val(&e)],
+        )),
+        sub_invocations: std::vec![],
+    };
+    // auths[0] should be the admin, auths[1] should be the new signer
     assert_eq!(
-        vault_client.try_add_reserve_vault(&reserve).err(),
-        Some(Ok(Error::from_contract_error(101)))
-    );
-}
-
-#[test]
-#[should_panic(expected = "Error(Storage, MissingValue)")]
-fn test_add_invalid_reserve() {
-    let e = Env::default();
-    e.cost_estimate().budget().reset_unlimited();
-    e.mock_all_auths();
-
-    let bombadil = Address::generate(&e);
-
-    // Deploy a blend pool with 2 mock assets, USDC and XLM
-    let blnd = e
-        .register_stellar_asset_contract_v2(bombadil.clone())
-        .address();
-    let usdc = e
-        .register_stellar_asset_contract_v2(bombadil.clone())
-        .address();
-    let xlm = e
-        .register_stellar_asset_contract_v2(bombadil.clone())
-        .address();
-    let usdc_client = MockTokenClient::new(&e, &usdc);
-    let xlm_client = MockTokenClient::new(&e, &xlm);
-
-    let blend_fixture = BlendFixture::deploy(&e, &bombadil, &blnd, &usdc);
-    let pool = create_blend_pool(&e, &blend_fixture, &bombadil, &usdc_client, &xlm_client);
-    let fee_vault = create_fee_vault(&e, &bombadil, &pool, false, 100_0000);
-    let fee_vault_client = FeeVaultClient::new(&e, &fee_vault);
-
-    // Adding an existent reserve should succeed
-    assert_eq!(fee_vault_client.try_add_reserve_vault(&usdc).is_ok(), true);
-    // Adding the same reserve again should fail
-    assert_eq!(
-        fee_vault_client.try_add_reserve_vault(&usdc).err(),
-        Some(Ok(Error::from_contract_error(101)))
+        e.auths(),
+        std::vec![
+            (samwise.clone(), authorized_function.clone()),
+            (frodo.clone(), authorized_function)
+        ]
     );
 
-    // Adding a different reserve should also succeed
-    assert_eq!(fee_vault_client.try_add_reserve_vault(&xlm).is_ok(), true);
+    e.as_contract(&vault_address, || {
+        // The new signer is frodo
+        assert_eq!(storage::get_signer(&e), Some(frodo.clone()));
+    });
 
-    // Adding a non-existent reserve should fail
-    fee_vault_client.add_reserve_vault(&Address::generate(&e));
+    // validate signer removal
+    vault_client.set_signer(&None);
+    let authorized_function = AuthorizedInvocation {
+        function: AuthorizedFunction::Contract((
+            vault_address.clone(),
+            Symbol::new(&e, "set_signer"),
+            vec![&e, None::<Address>.into_val(&e)],
+        )),
+        sub_invocations: std::vec![],
+    };
+    assert_eq!(
+        e.auths(),
+        std::vec![(samwise.clone(), authorized_function.clone()),]
+    );
+
+    e.as_contract(&vault_address, || {
+        // The new signer is None
+        assert_eq!(storage::get_signer(&e), None);
+    });
 }

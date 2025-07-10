@@ -2,7 +2,9 @@
 
 use crate::constants::{SCALAR_12, SCALAR_7};
 use crate::storage::ONE_DAY_LEDGERS;
-use crate::testutils::{assert_approx_eq_rel, create_blend_pool, create_fee_vault, EnvTestUtils};
+use crate::testutils::{
+    assert_approx_eq_abs, assert_approx_eq_rel, create_blend_pool, register_fee_vault, EnvTestUtils,
+};
 use crate::FeeVaultClient;
 use blend_contract_sdk::pool::{Client as PoolClient, Request};
 use blend_contract_sdk::testutils::BlendFixture;
@@ -53,12 +55,10 @@ fn test_fee_accrual() {
     // emits to each reserve token evently, and starts emissions
     let pool = create_blend_pool(&e, &blend_fixture, &bombadil, &usdc_client, &xlm_client);
     let pool_client = PoolClient::new(&e, &pool);
-    let fee_vault = create_fee_vault(&e, &bombadil, &pool, false, 100_0000);
-    let fee_vault_client = FeeVaultClient::new(&e, &fee_vault);
-
-    fee_vault_client.add_reserve_vault(&usdc);
-    fee_vault_client.add_reserve_vault(&xlm);
-    fee_vault_client.set_fee_mode(&false, &0_1000000);
+    let fee_vault_usdc = register_fee_vault(&e, &bombadil, &pool, &usdc, 0, 100_0000, None);
+    let fee_vault_usdc_client = FeeVaultClient::new(&e, &fee_vault_usdc);
+    let fee_vault_xlm = register_fee_vault(&e, &bombadil, &pool, &xlm, 0, 100_0000, None);
+    let fee_vault_xlm_client = FeeVaultClient::new(&e, &fee_vault_xlm);
 
     // Setup pool util rate
     // Bomadil deposits 200k tokens and borrows 100k tokens for a 50% util rate
@@ -101,8 +101,8 @@ fn test_fee_accrual() {
     usdc_client.mint(&frodo, &starting_balance);
     usdc_client.mint(&samwise, &starting_balance);
 
-    fee_vault_client.deposit(&usdc, &frodo, &starting_balance);
-    fee_vault_client.deposit(&usdc, &samwise, &starting_balance);
+    fee_vault_usdc_client.deposit(&frodo, &starting_balance);
+    fee_vault_usdc_client.deposit(&samwise, &starting_balance);
 
     // deposit into usdc reserve
     let merry_starting_balance = starting_balance * 2;
@@ -141,8 +141,8 @@ fn test_fee_accrual() {
     xlm_client.mint(&frodo, &starting_balance);
     xlm_client.mint(&samwise, &starting_balance);
 
-    fee_vault_client.deposit(&xlm, &frodo, &starting_balance);
-    fee_vault_client.deposit(&xlm, &samwise, &starting_balance);
+    fee_vault_xlm_client.deposit(&frodo, &starting_balance);
+    fee_vault_xlm_client.deposit(&samwise, &starting_balance);
 
     // deposit into xlm reserve
     xlm_client.mint(&merry, &merry_starting_balance);
@@ -179,7 +179,7 @@ fn test_fee_accrual() {
     /*
      * Cause a bunch of accruals to verify fees are charged correctly.
      *
-     * -> Cause a b_rate update on the pool every day for 100 days
+     * -> Cause a b_rate update on the pool every day for 365 days
      * -> For USDC, accrued to fee vault daily.
      * -> For XLM, accrued to fee vault ~monthly.
      * -> Verify fee's charged for each reserve are approximately the same
@@ -191,12 +191,12 @@ fn test_fee_accrual() {
 
         let usdc_deposit = 10000;
         // deposit into usdc fee vault every day
-        fee_vault_client.deposit(&usdc, &gandalf, &usdc_deposit);
+        fee_vault_usdc_client.deposit(&gandalf, &usdc_deposit);
 
         // deposit into xlm fee vault every month
         if day % 30 == 0 {
             let xlm_deposit = 300000;
-            fee_vault_client.deposit(&xlm, &gandalf, &xlm_deposit);
+            fee_vault_xlm_client.deposit(&gandalf, &xlm_deposit);
         }
 
         // supply from pool to cause b_rate update and maintain ~50% util rate
@@ -223,8 +223,8 @@ fn test_fee_accrual() {
     }
 
     // deposit into both fee vaults on final ledger to update b_rate
-    fee_vault_client.deposit(&usdc, &gandalf, &1_0000000);
-    fee_vault_client.deposit(&xlm, &gandalf, &1_0000000);
+    fee_vault_usdc_client.deposit(&gandalf, &1_0000000);
+    fee_vault_xlm_client.deposit(&gandalf, &1_0000000);
 
     // calculate merry profit for 200 USDC and 200 XLM deposits
     pool_client.submit(
@@ -252,7 +252,7 @@ fn test_fee_accrual() {
 
     // validate frodo can withdraw his expected share of the profit
     // -> @dev: this is expected to be less as than expected as fees are accrued in b_tokens, reducing future interest
-    let usdc_vault = fee_vault_client.get_reserve_vault(&usdc);
+    let usdc_vault = fee_vault_usdc_client.get_vault();
     let usdc_withdrawal_amount = usdc_vault
         .shares_to_b_tokens_down(starting_balance)
         .fixed_mul_floor(usdc_vault.b_rate, SCALAR_12)
@@ -266,14 +266,14 @@ fn test_fee_accrual() {
         0_0100000,
     );
     let usdc_withdraw_amount = starting_balance + frodo_profit_usdc;
-    fee_vault_client.withdraw(&usdc, &frodo, &usdc_withdraw_amount);
+    fee_vault_usdc_client.withdraw(&frodo, &usdc_withdraw_amount);
 
     assert_eq!(usdc_client.balance(&frodo), usdc_withdraw_amount);
     // -> verify no more than dust shares left for frodo
-    assert!(fee_vault_client.get_shares(&usdc, &frodo) < 10);
+    assert!(fee_vault_usdc_client.get_shares(&frodo) < 10);
 
     // -> @dev: this is expected to be less than expected as fees are accrued in b_tokens, reducing future interest
-    let xlm_vault = fee_vault_client.get_reserve_vault(&xlm);
+    let xlm_vault = fee_vault_xlm_client.get_vault();
     let xlm_withdrawal_amount = xlm_vault
         .shares_to_b_tokens_down(starting_balance)
         .fixed_mul_floor(xlm_vault.b_rate, SCALAR_12)
@@ -287,11 +287,11 @@ fn test_fee_accrual() {
         0_0100000,
     );
     let withdraw_amount_xlm = starting_balance + frodo_profit_xlm;
-    fee_vault_client.withdraw(&xlm, &frodo, &withdraw_amount_xlm);
+    fee_vault_xlm_client.withdraw(&frodo, &withdraw_amount_xlm);
 
     assert_eq!(xlm_client.balance(&frodo), withdraw_amount_xlm);
     // -> verify no more than dust shares left for frodo
-    assert!(fee_vault_client.get_shares(&xlm, &frodo) < 10);
+    assert!(fee_vault_xlm_client.get_shares(&frodo) < 10);
 
     // verify profit is close regardless of accrual rate
     assert_approx_eq_rel(frodo_profit_xlm, frodo_profit_usdc, 0_0100000);
@@ -299,17 +299,17 @@ fn test_fee_accrual() {
     // admin claim profits
     let pre_claim_usdc = usdc_client.balance(&bombadil);
     let admin_usdc_fees = usdc_vault
-        .accrued_fees
+        .admin_balance
         .fixed_mul_floor(usdc_vault.b_rate, SCALAR_12)
         .unwrap_optimized();
-    fee_vault_client.claim_fees(&usdc, &bombadil);
+    fee_vault_usdc_client.admin_withdraw(&admin_usdc_fees);
     assert_eq!(
         usdc_client.balance(&bombadil),
         admin_usdc_fees + pre_claim_usdc
     );
     // -> verify only dust leftover in fee vault
-    let post_claim_usdc_vault = fee_vault_client.get_reserve_vault(&usdc);
-    assert!(post_claim_usdc_vault.accrued_fees < 10);
+    let post_claim_usdc_vault = fee_vault_usdc_client.get_vault();
+    assert!(post_claim_usdc_vault.admin_balance < 10);
 
     // verify merry profit is approximately equal to total vault profit.
     assert_approx_eq_rel(
@@ -320,17 +320,17 @@ fn test_fee_accrual() {
 
     let pre_claim_xlm = xlm_client.balance(&bombadil);
     let admin_xlm_fees = xlm_vault
-        .accrued_fees
+        .admin_balance
         .fixed_mul_floor(xlm_vault.b_rate, SCALAR_12)
         .unwrap_optimized();
-    fee_vault_client.claim_fees(&xlm, &bombadil);
+    fee_vault_xlm_client.admin_withdraw(&admin_xlm_fees);
     assert_eq!(
         xlm_client.balance(&bombadil),
         admin_xlm_fees + pre_claim_xlm
     );
     // -> verify only dust leftover in fee vault
-    let post_claim_xlm_vault = fee_vault_client.get_reserve_vault(&xlm);
-    assert!(post_claim_xlm_vault.accrued_fees < 10);
+    let post_claim_xlm_vault = fee_vault_xlm_client.get_vault();
+    assert!(post_claim_xlm_vault.admin_balance < 10);
 
     // verify merry profit is approximately equal to total vault profit.
     assert_approx_eq_rel(
@@ -380,14 +380,10 @@ fn test_fee_accrual_capped_rate() {
     // emits to each reserve token evently, and starts emissions
     let pool = create_blend_pool(&e, &blend_fixture, &bombadil, &usdc_client, &xlm_client);
     let pool_client = PoolClient::new(&e, &pool);
-    let fee_vault = create_fee_vault(&e, &bombadil, &pool, true, 0_0500000);
-    let fee_vault_client = FeeVaultClient::new(&e, &fee_vault);
-
-    fee_vault_client.add_reserve_vault(&usdc);
-    fee_vault_client.add_reserve_vault(&xlm);
-
-    // set fee mode to capped rate @ 5%
-    fee_vault_client.set_fee_mode(&true, &0_0500000);
+    let fee_vault_usdc = register_fee_vault(&e, &bombadil, &pool, &usdc, 1, 50_0000, None);
+    let fee_vault_usdc_client = FeeVaultClient::new(&e, &fee_vault_usdc);
+    let fee_vault_xlm = register_fee_vault(&e, &bombadil, &pool, &xlm, 1, 50_0000, None);
+    let fee_vault_xlm_client = FeeVaultClient::new(&e, &fee_vault_xlm);
 
     // Setup pool util rate
     // -> USDC: deposit 200k tokens and borrow 120k tokens for 60% util rate, and 6% effective supply rate
@@ -431,8 +427,8 @@ fn test_fee_accrual_capped_rate() {
     usdc_client.mint(&frodo, &starting_balance);
     usdc_client.mint(&samwise, &starting_balance);
 
-    fee_vault_client.deposit(&usdc, &frodo, &starting_balance);
-    fee_vault_client.deposit(&usdc, &samwise, &starting_balance);
+    fee_vault_usdc_client.deposit(&frodo, &starting_balance);
+    fee_vault_usdc_client.deposit(&samwise, &starting_balance);
 
     // deposit into usdc reserve
     let merry_starting_balance = starting_balance * 2;
@@ -471,8 +467,8 @@ fn test_fee_accrual_capped_rate() {
     xlm_client.mint(&frodo, &starting_balance);
     xlm_client.mint(&samwise, &starting_balance);
 
-    fee_vault_client.deposit(&xlm, &frodo, &starting_balance);
-    fee_vault_client.deposit(&xlm, &samwise, &starting_balance);
+    fee_vault_xlm_client.deposit(&frodo, &starting_balance);
+    fee_vault_xlm_client.deposit(&samwise, &starting_balance);
 
     // deposit into xlm reserve
     xlm_client.mint(&merry, &merry_starting_balance);
@@ -509,9 +505,8 @@ fn test_fee_accrual_capped_rate() {
     /*
      * Cause a bunch of accruals to verify fees are charged correctly.
      *
-     * -> Cause a b_rate update on the pool every day for 100 days
-     * -> For USDC, accrued to fee vault daily.
-     * -> For XLM, accrued to fee vault ~monthly.
+     * -> Cause a b_rate update on the pool every day for 365 days
+     * -> Accrue to fee vaults daily
      * -> Verify fee's charged for each reserve are approximately the same
      */
     usdc_client.mint(&gandalf, &1000_0000000);
@@ -521,10 +516,10 @@ fn test_fee_accrual_capped_rate() {
 
         let deposit = 10000;
         // deposit into usdc fee vault every day
-        fee_vault_client.deposit(&usdc, &gandalf, &deposit);
+        fee_vault_usdc_client.deposit(&gandalf, &deposit);
 
         // deposit into xlm fee vault every day
-        fee_vault_client.deposit(&xlm, &gandalf, &deposit);
+        fee_vault_xlm_client.deposit(&gandalf, &deposit);
 
         // supply from pool to cause b_rate update and maintain ~40% util for xlm and ~60% util for usdc
         // 80k tokens borrowed for xlm @ a 10% borrow rate
@@ -552,8 +547,8 @@ fn test_fee_accrual_capped_rate() {
     }
 
     // deposit into both fee vaults on final ledger to update b_rate
-    fee_vault_client.deposit(&usdc, &gandalf, &100_0000000);
-    fee_vault_client.deposit(&xlm, &gandalf, &100_0000000);
+    fee_vault_usdc_client.deposit(&gandalf, &100_0000000);
+    fee_vault_xlm_client.deposit(&gandalf, &100_0000000);
 
     // calculate merry profit for 200 USDC and 200 XLM deposits
     pool_client.submit(
@@ -582,7 +577,7 @@ fn test_fee_accrual_capped_rate() {
     // validate frodo can withdraw his expected share of the profit
     // expected for frodo profit to be capped at 5% and the additional 1% is accrued to the fee vault admin
     // -> @dev: this is expected to be less as than expected as fees are accrued in b_tokens, reducing future interest
-    let usdc_vault = fee_vault_client.get_reserve_vault(&usdc);
+    let usdc_vault = fee_vault_usdc_client.get_vault();
     let usdc_withdrawal_amount = usdc_vault
         .shares_to_b_tokens_down(starting_balance)
         .fixed_mul_floor(usdc_vault.b_rate, SCALAR_12)
@@ -597,15 +592,15 @@ fn test_fee_accrual_capped_rate() {
         0_0100000,
     );
     let usdc_withdraw_amount = starting_balance + frodo_profit_usdc;
-    fee_vault_client.withdraw(&usdc, &frodo, &usdc_withdraw_amount);
+    fee_vault_usdc_client.withdraw(&frodo, &usdc_withdraw_amount);
 
     assert_eq!(usdc_client.balance(&frodo), usdc_withdraw_amount);
     // -> verify no more than dust shares left for frodo
-    assert!(fee_vault_client.get_shares(&usdc, &frodo) < 10);
+    assert!(fee_vault_usdc_client.get_shares(&frodo) < 10);
 
     // -> @dev: this is expected to be less than expected as fees are accrued in b_tokens, reducing future interest
     // expected for frodo to profit the full 4% and the fee vault admin to get none
-    let xlm_vault = fee_vault_client.get_reserve_vault(&xlm);
+    let xlm_vault = fee_vault_xlm_client.get_vault();
     let xlm_withdrawal_amount = xlm_vault
         .shares_to_b_tokens_down(starting_balance)
         .fixed_mul_floor(xlm_vault.b_rate, SCALAR_12)
@@ -620,27 +615,27 @@ fn test_fee_accrual_capped_rate() {
         0_0100000,
     );
     let withdraw_amount_xlm = starting_balance + frodo_profit_xlm;
-    fee_vault_client.withdraw(&xlm, &frodo, &withdraw_amount_xlm);
+    fee_vault_xlm_client.withdraw(&frodo, &withdraw_amount_xlm);
 
     assert_eq!(xlm_client.balance(&frodo), withdraw_amount_xlm);
     // -> verify no more than dust shares left for frodo
-    assert!(fee_vault_client.get_shares(&xlm, &frodo) < 10);
+    assert!(fee_vault_xlm_client.get_shares(&frodo) < 10);
 
     // admin claim profits USDC
     let pre_claim_usdc = usdc_client.balance(&bombadil);
     let admin_usdc_fees = usdc_vault
-        .accrued_fees
+        .admin_balance
         .fixed_mul_floor(usdc_vault.b_rate, SCALAR_12)
         .unwrap_optimized();
-    fee_vault_client.claim_fees(&usdc, &bombadil);
+    fee_vault_usdc_client.admin_withdraw(&admin_usdc_fees);
     assert_eq!(
         usdc_client.balance(&bombadil),
         admin_usdc_fees + pre_claim_usdc
     );
 
     // -> verify only dust leftover in fee vault
-    let post_claim_usdc_vault = fee_vault_client.get_reserve_vault(&usdc);
-    assert!(post_claim_usdc_vault.accrued_fees < 10);
+    let post_claim_usdc_vault = fee_vault_usdc_client.get_vault();
+    assert!(post_claim_usdc_vault.admin_balance < 10);
 
     // verify merry profit is approximately equal to total vault profit.
     assert_approx_eq_rel(
@@ -650,12 +645,373 @@ fn test_fee_accrual_capped_rate() {
     );
 
     // admin claim profits XLM
-    let result = fee_vault_client.try_claim_fees(&xlm, &bombadil);
+    let result = fee_vault_xlm_client.try_admin_withdraw(&10);
     assert!(result.is_err());
     // -> verify nothing in fee vault
-    let post_claim_xlm_vault = fee_vault_client.get_reserve_vault(&xlm);
-    assert!(post_claim_xlm_vault.accrued_fees == 0);
+    let post_claim_xlm_vault = fee_vault_xlm_client.get_vault();
+    assert!(post_claim_xlm_vault.admin_balance == 0);
 
     // verify merry profit is approximately equal to total frodo profit
     assert_approx_eq_rel(frodo_profit_xlm * 2, merry_profit_xlm, 0_0100000);
+}
+
+#[test]
+fn test_fee_accrual_fixed_rate() {
+    let e = Env::default();
+    e.cost_estimate().budget().reset_unlimited();
+    e.mock_all_auths();
+    e.ledger().set(LedgerInfo {
+        timestamp: 1441065600, // Sept 1st, 2015 12:00:00 AM UTC
+        protocol_version: 22,
+        sequence_number: 100,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 500 * ONE_DAY_LEDGERS,
+        min_persistent_entry_ttl: 500 * ONE_DAY_LEDGERS,
+        max_entry_ttl: 1000 * ONE_DAY_LEDGERS,
+    });
+
+    let bombadil = Address::generate(&e);
+    let gandalf = Address::generate(&e);
+    let frodo = Address::generate(&e);
+    let samwise = Address::generate(&e);
+    let merry = Address::generate(&e);
+
+    let blnd = e
+        .register_stellar_asset_contract_v2(bombadil.clone())
+        .address();
+    let usdc = e
+        .register_stellar_asset_contract_v2(bombadil.clone())
+        .address();
+    let xlm = e
+        .register_stellar_asset_contract_v2(bombadil.clone())
+        .address();
+    let usdc_client = MockTokenClient::new(&e, &usdc);
+    let xlm_client = MockTokenClient::new(&e, &xlm);
+
+    let blend_fixture = BlendFixture::deploy(&e, &bombadil, &blnd, &usdc);
+
+    // usdc (0) and xlm (1) charge a fixed 10% borrow rate with 0% backstop take rate
+    // emits to each reserve token evently, and starts emissions
+    let pool = create_blend_pool(&e, &blend_fixture, &bombadil, &usdc_client, &xlm_client);
+    let pool_client = PoolClient::new(&e, &pool);
+    let fee_vault_usdc = register_fee_vault(&e, &bombadil, &pool, &usdc, 2, 50_0000, None);
+    let fee_vault_usdc_client = FeeVaultClient::new(&e, &fee_vault_usdc);
+    let fee_vault_xlm = register_fee_vault(&e, &bombadil, &pool, &xlm, 2, 50_0000, None);
+    let fee_vault_xlm_client = FeeVaultClient::new(&e, &fee_vault_xlm);
+
+    // Setup pool util rate
+    // -> USDC: deposit 200k tokens and borrow 120k tokens for 60% util rate, and 6% effective supply rate
+    // -> XLM: deposit 200k tokens and borrow 80k tokens for 40% util rate, and 4% effective supply rate
+    let requests = vec![
+        &e,
+        Request {
+            address: usdc.clone(),
+            amount: 200_000_0000000,
+            request_type: 2,
+        },
+        Request {
+            address: usdc.clone(),
+            amount: 120_000_0000000,
+            request_type: 4,
+        },
+        Request {
+            address: xlm.clone(),
+            amount: 200_000_0000000,
+            request_type: 2,
+        },
+        Request {
+            address: xlm.clone(),
+            amount: 80_000_0000000,
+            request_type: 4,
+        },
+    ];
+    pool_client
+        .mock_all_auths()
+        .submit(&bombadil, &bombadil, &bombadil, &requests);
+
+    /*
+     * Deposit into pool
+     * -> deposit 100 into fee each vault for each frodo and samwise
+     * -> deposit 200 into pool for each reesrve for merry
+     * -> bombadil borrow from pool to return to 50% util rate
+     */
+
+    // deposit into usdc fee vault
+    let starting_balance = 100_0000000;
+    usdc_client.mint(&frodo, &starting_balance);
+    usdc_client.mint(&samwise, &starting_balance);
+
+    fee_vault_usdc_client.deposit(&frodo, &starting_balance);
+    fee_vault_usdc_client.deposit(&samwise, &starting_balance);
+
+    // deposit into usdc reserve
+    let merry_starting_balance = starting_balance * 2;
+    usdc_client.mint(&merry, &merry_starting_balance);
+    pool_client.submit(
+        &merry,
+        &merry,
+        &merry,
+        &vec![
+            &e,
+            Request {
+                request_type: 0,
+                address: usdc.clone(),
+                amount: merry_starting_balance,
+            },
+        ],
+    );
+
+    // borrow from pool to return USDC to 50% util rate
+    let borrow_amount = merry_starting_balance;
+    pool_client.submit(
+        &bombadil,
+        &bombadil,
+        &bombadil,
+        &vec![
+            &e,
+            Request {
+                request_type: 4,
+                address: usdc.clone(),
+                amount: borrow_amount,
+            },
+        ],
+    );
+
+    // deposit into xlm fee vault
+    xlm_client.mint(&frodo, &starting_balance);
+    xlm_client.mint(&samwise, &starting_balance);
+
+    fee_vault_xlm_client.deposit(&frodo, &starting_balance);
+    fee_vault_xlm_client.deposit(&samwise, &starting_balance);
+
+    // add admin balance to XLM fee vault since it will be under target
+    let xlm_starting_admin_balance = 10_0000000;
+    xlm_client.mint(&bombadil, &xlm_starting_admin_balance);
+    fee_vault_xlm_client.admin_deposit(&xlm_starting_admin_balance);
+
+    // deposit into xlm reserve
+    xlm_client.mint(&merry, &merry_starting_balance);
+    pool_client.submit(
+        &merry,
+        &merry,
+        &merry,
+        &vec![
+            &e,
+            Request {
+                request_type: 0,
+                address: xlm.clone(),
+                amount: merry_starting_balance,
+            },
+        ],
+    );
+
+    // borrow from pool to return XLM to 50% util rate
+    let borrow_amount = merry_starting_balance;
+    pool_client.submit(
+        &bombadil,
+        &bombadil,
+        &bombadil,
+        &vec![
+            &e,
+            Request {
+                request_type: 4,
+                address: xlm.clone(),
+                amount: borrow_amount,
+            },
+        ],
+    );
+
+    /*
+     * Cause a bunch of accruals to verify fees are charged correctly.
+     *
+     * -> Cause a b_rate update on the pool every day for 365 days
+     * -> Verify fee's charged for each reserve are approximately the same
+     */
+    usdc_client.mint(&gandalf, &1000_0000000);
+    xlm_client.mint(&gandalf, &1000_0000000);
+    for _ in 0..365 {
+        e.jump_time(86400);
+
+        let deposit = 10000;
+        // deposit into usdc fee vault every day
+        fee_vault_usdc_client.deposit(&gandalf, &deposit);
+
+        // deposit into xlm fee vault every day
+        fee_vault_xlm_client.deposit(&gandalf, &deposit);
+
+        // supply from pool to cause b_rate update and maintain ~40% util for xlm and ~60% util for usdc
+        // 80k tokens borrowed for xlm @ a 10% borrow rate
+        // 120k tokens borrowed for usdc @ a 10% borrow rate
+        let approx_daily_interest_xlm = 22_0000000;
+        let approx_daily_interest_usdc = 33_0000000;
+        pool_client.submit(
+            &bombadil,
+            &bombadil,
+            &bombadil,
+            &vec![
+                &e,
+                Request {
+                    request_type: 2,
+                    address: xlm.clone(),
+                    amount: approx_daily_interest_xlm,
+                },
+                Request {
+                    request_type: 2,
+                    address: usdc.clone(),
+                    amount: approx_daily_interest_usdc,
+                },
+            ],
+        );
+    }
+
+    // deposit into both fee vaults on final ledger to update b_rate
+    fee_vault_usdc_client.deposit(&gandalf, &100_0000000);
+    fee_vault_xlm_client.deposit(&gandalf, &100_0000000);
+
+    // calculate merry profit for 200 USDC and 200 XLM deposits
+    pool_client.submit(
+        &merry,
+        &merry,
+        &merry,
+        &vec![
+            &e,
+            Request {
+                request_type: 1,
+                address: usdc.clone(),
+                amount: merry_starting_balance * 2,
+            },
+            Request {
+                request_type: 1,
+                address: xlm.clone(),
+                amount: merry_starting_balance * 2,
+            },
+        ],
+    );
+    let merry_final_usdc = usdc_client.balance(&merry);
+    let merry_profit_usdc = merry_final_usdc - merry_starting_balance;
+    let merry_final_xlm = xlm_client.balance(&merry);
+    let merry_profit_xlm = merry_final_xlm - merry_starting_balance;
+
+    // validate frodo can withdraw his expected share of the profit
+    // expected for frodo profit to be capped at 5% and the additional 1% is accrued to the fee vault admin
+    // -> @dev: this is expected to be less as than expected as fees are accrued in b_tokens, reducing future interest
+    let usdc_vault = fee_vault_usdc_client.get_vault();
+    let usdc_withdrawal_amount = usdc_vault
+        .shares_to_b_tokens_down(starting_balance)
+        .fixed_mul_floor(usdc_vault.b_rate, SCALAR_12)
+        .unwrap_optimized();
+    let frodo_profit_usdc = usdc_withdrawal_amount - starting_balance;
+    // 5% apr compounded daily is ~1.0513
+    assert_approx_eq_rel(
+        usdc_withdrawal_amount,
+        starting_balance
+            .fixed_mul_floor(1_0513000, SCALAR_7)
+            .unwrap_optimized(),
+        0_0100000,
+    );
+    let usdc_withdraw_amount = starting_balance + frodo_profit_usdc;
+    fee_vault_usdc_client.withdraw(&frodo, &usdc_withdraw_amount);
+
+    assert_eq!(usdc_client.balance(&frodo), usdc_withdraw_amount);
+    // -> verify no more than dust shares left for frodo
+    assert!(fee_vault_usdc_client.get_shares(&frodo) < 10);
+
+    // expected for frodo to profit 4% from the vault and be supplemented 1% by the fee vault admin, reaching 5% total
+    // -> @dev: this is expected to be less than expected as fees are accrued in b_tokens, reducing future interest
+    let xlm_vault = fee_vault_xlm_client.get_vault();
+    let xlm_withdrawal_amount = xlm_vault
+        .shares_to_b_tokens_down(starting_balance)
+        .fixed_mul_floor(xlm_vault.b_rate, SCALAR_12)
+        .unwrap_optimized();
+    let frodo_profit_xlm = xlm_withdrawal_amount - starting_balance;
+    // 5% apr compounded daily is ~1.0513
+    assert_approx_eq_rel(
+        xlm_withdrawal_amount,
+        starting_balance
+            .fixed_mul_floor(1_0513000, SCALAR_7)
+            .unwrap_optimized(),
+        0_0100000,
+    );
+    let withdraw_amount_xlm = starting_balance + frodo_profit_xlm;
+    fee_vault_xlm_client.withdraw(&frodo, &withdraw_amount_xlm);
+
+    assert_eq!(xlm_client.balance(&frodo), withdraw_amount_xlm);
+    // -> verify no more than dust shares left for frodo
+    assert!(fee_vault_xlm_client.get_shares(&frodo) < 10);
+
+    // admin claim profits USDC
+    let pre_claim_usdc = usdc_client.balance(&bombadil);
+    let admin_usdc_fees = usdc_vault
+        .admin_balance
+        .fixed_mul_floor(usdc_vault.b_rate, SCALAR_12)
+        .unwrap_optimized();
+    fee_vault_usdc_client.admin_withdraw(&admin_usdc_fees);
+    assert_eq!(
+        usdc_client.balance(&bombadil),
+        admin_usdc_fees + pre_claim_usdc
+    );
+
+    // -> verify only dust leftover in fee vault
+    let post_claim_usdc_vault = fee_vault_usdc_client.get_vault();
+    assert!(post_claim_usdc_vault.admin_balance < 10);
+
+    // verify merry profit is approximately equal to total vault profit.
+    assert_approx_eq_rel(
+        admin_usdc_fees + frodo_profit_usdc * 2,
+        merry_profit_usdc,
+        0_0100000,
+    );
+
+    // admin claims remaining XLM. Need to take into account the interest earned by the admin on their initial
+    // deposit, which is ~4% compounded daily, or 10 * 0.04080849 = 0.4080849 XLM
+    let pre_claim_xlm = xlm_client.balance(&bombadil);
+    let admin_xlm_balance = xlm_vault
+        .admin_balance
+        .fixed_mul_floor(xlm_vault.b_rate, SCALAR_12)
+        .unwrap_optimized();
+    let admin_xlm_supplement = xlm_starting_admin_balance + 4080849 - admin_xlm_balance;
+    assert!(admin_xlm_supplement > 0);
+    fee_vault_xlm_client.admin_withdraw(&admin_xlm_balance);
+    assert_eq!(
+        xlm_client.balance(&bombadil),
+        pre_claim_xlm + admin_xlm_balance
+    );
+
+    // -> verify only dust leftover in fee vault
+    let post_admin_xlm_vault = fee_vault_xlm_client.get_vault();
+    assert!(post_admin_xlm_vault.admin_balance < 10 && post_admin_xlm_vault.admin_balance > -10);
+
+    // verify merry profit is approximately equal to total vault profit net the supplement
+    assert_approx_eq_rel(
+        frodo_profit_xlm * 2 - admin_xlm_supplement,
+        merry_profit_xlm,
+        0_0100000,
+    );
+
+    // verify everyone can withdraw their funds from a supplemented fee vault
+    // -> admin deposits 10 stroops extra XLM to cover rounding errors
+    fee_vault_xlm_client.admin_deposit(&10);
+
+    // -> samwise withdraw from fee vault
+    let samwise_withdrawal_amount = fee_vault_xlm_client.get_underlying_tokens(&samwise);
+    assert_approx_eq_abs(xlm_withdrawal_amount, samwise_withdrawal_amount, 1000);
+    fee_vault_xlm_client.withdraw(&samwise, &samwise_withdrawal_amount);
+    assert_eq!(xlm_client.balance(&samwise), samwise_withdrawal_amount);
+    assert!(fee_vault_xlm_client.get_shares(&samwise) < 10);
+
+    // -> gandalf withdraw from fee vault
+    let pre_gandalf_balance = xlm_client.balance(&gandalf);
+    let gandalf_withdrawal_amount = fee_vault_xlm_client.get_underlying_tokens(&gandalf);
+    fee_vault_xlm_client.withdraw(&gandalf, &gandalf_withdrawal_amount);
+    assert_eq!(
+        xlm_client.balance(&gandalf),
+        gandalf_withdrawal_amount + pre_gandalf_balance
+    );
+    assert!(fee_vault_xlm_client.get_shares(&gandalf) < 10);
+
+    // -> verify fee vault is empty except for dust shares
+    let post_withdraw_fee_vault = fee_vault_xlm_client.get_vault();
+    assert!(post_withdraw_fee_vault.total_b_tokens < 10);
+    assert!(post_withdraw_fee_vault.total_shares < 10);
 }

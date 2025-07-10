@@ -10,9 +10,11 @@ pub mod contract;
 pub mod errors;
 pub mod events;
 pub mod pool;
-pub mod reserve_vault;
+pub mod rewards;
 pub mod storage;
+pub mod summary;
 pub mod validator;
+pub mod vault;
 
 pub use contract::*;
 
