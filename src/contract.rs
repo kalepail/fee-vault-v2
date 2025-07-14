@@ -436,7 +436,8 @@ impl FeeVault {
         new_shares
     }
 
-    /// Withdraws tokens from the fee vault for a specific reserve
+    /// Withdraws tokens from the fee vault for a specific reserve. If the input amount is greater
+    /// than the user's underlying balance, the user's full balance will be withdrawn.
     ///
     /// ### Arguments
     /// * `user` - The address of the user making the withdrawal
@@ -447,7 +448,6 @@ impl FeeVault {
     ///
     /// ### Panics
     /// * `InvalidAmount` - If the amount is less than or equal to 0
-    /// * `BalanceError` - If the user does not have enough shares to withdraw the amount
     /// * `InvalidBTokensBurnt` - If the amount of bTokens burnt is less than or equal to 0
     /// * `InsufficientReserves` - If the pool doesn't have enough reserves to complete the withdrawal
     pub fn withdraw(e: Env, user: Address, amount: i128) -> i128 {
@@ -457,8 +457,9 @@ impl FeeVault {
 
         let pool = storage::get_pool(&e);
         let asset = storage::get_asset(&e);
-        pool::withdraw(&e, &pool, &asset, &user, amount);
-        let (b_tokens_burnt, burnt_shares) = vault::withdraw(&e, &pool, &asset, &user, amount);
+        let (withdraw_amount, b_tokens_burnt, burnt_shares) =
+            vault::withdraw(&e, &pool, &asset, &user, amount);
+        pool::withdraw(&e, &pool, &asset, &user, withdraw_amount);
 
         FeeVaultEvents::vault_withdraw(
             &e,
