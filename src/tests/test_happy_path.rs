@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::constants::SCALAR_7;
+use crate::constants::{SCALAR_12, SCALAR_7};
 use crate::storage::ONE_DAY_LEDGERS;
 use crate::testutils::{assert_approx_eq_abs, create_blend_pool, register_fee_vault, EnvTestUtils};
 use crate::FeeVaultClient;
@@ -47,7 +47,7 @@ fn test_happy_path() {
     let fee_vault_client = FeeVaultClient::new(&e, &fee_vault);
 
     // Setup pool util rate
-    // Bomadil deposits 200k tokens and borrows 100k tokens for a 50% util rate
+    // Bombadil deposits 200k tokens and borrows 100k tokens for a 50% util rate
     let requests = vec![
         &e,
         Request {
@@ -106,6 +106,9 @@ fn test_happy_path() {
         )
     );
 
+    // jump 1 day to accrue some interest for pool
+    e.jump(ONE_DAY_LEDGERS);
+
     /*
      * Deposit into pool
      * -> deposit 100 into fee vault for each frodo and samwise
@@ -113,7 +116,7 @@ fn test_happy_path() {
      * -> bombadil borrow from pool to return to 50% util rate
      * -> verify a deposit into an uninitialized vault fails
      */
-    let pool_usdc_balace_start = usdc_client.balance(&pool);
+    let pool_usdc_balance_start = usdc_client.balance(&pool);
     let starting_balance = 100_0000000;
     usdc_client.mint(&frodo, &starting_balance);
     usdc_client.mint(&samwise, &starting_balance);
@@ -231,19 +234,29 @@ fn test_happy_path() {
         ]
     );
 
-    // verify deposit (pool b_rate still 1 as no time has passed)
+    // verify deposit
     assert_eq!(usdc_client.balance(&frodo), 0);
     assert_eq!(usdc_client.balance(&samwise), 0);
-    assert_eq!(fee_vault_client.get_shares(&frodo), starting_balance);
-    assert_eq!(fee_vault_client.get_shares(&samwise), starting_balance);
+    let usdc_reserve = pool_client.get_reserve(&usdc);
+    let b_tokens_starting_balance = starting_balance
+        .fixed_div_floor(usdc_reserve.data.b_rate, SCALAR_12)
+        .unwrap_optimized();
+    assert_eq!(
+        fee_vault_client.get_shares(&frodo),
+        b_tokens_starting_balance
+    );
+    assert_eq!(
+        fee_vault_client.get_shares(&samwise),
+        b_tokens_starting_balance
+    );
     assert_eq!(
         usdc_client.balance(&pool),
-        pool_usdc_balace_start + starting_balance * 2
+        pool_usdc_balance_start + starting_balance * 2
     );
     let vault_positions = pool_client.get_positions(&fee_vault);
     assert_eq!(
         vault_positions.supply.get(0).unwrap_optimized(),
-        starting_balance * 2
+        b_tokens_starting_balance * 2
     );
 
     // merry deposit directly into pool
@@ -302,6 +315,14 @@ fn test_happy_path() {
     // 5% pool supply rate with 10% vault fee (within 0.1% of 4.5%)
     assert_approx_eq_abs(vault_summary.est_apr, 0_0450000, 0_0010000);
 
+    // check admin fee accrual does not impact vault b_token tracking
+    let vault_positions = pool_client.get_positions(&fee_vault);
+    let vault_usdc_position = vault_positions.supply.get(0).unwrap();
+    assert_eq!(
+        vault_usdc_position,
+        vault_summary.vault.total_b_tokens + vault_summary.vault.admin_balance
+    );
+
     /*
      * Withdraw from pool
      * -> withdraw all funds from pool for merry
@@ -336,10 +357,6 @@ fn test_happy_path() {
         .unwrap_optimized();
     let withdraw_amount = starting_balance + expected_frodo_profit;
 
-    // -> verify over withdraw fails
-    let result = fee_vault_client.try_withdraw(&samwise, &(withdraw_amount + 1));
-    assert_eq!(result.err(), Some(Ok(Error::from_contract_error(10))));
-
     fee_vault_client.withdraw(&frodo, &withdraw_amount);
     // -> verify withdraw auth
     assert_eq!(
@@ -357,7 +374,8 @@ fn test_happy_path() {
         )]
     );
 
-    fee_vault_client.withdraw(&samwise, &withdraw_amount);
+    // -> verify over withdraw is pulled down to full balance
+    fee_vault_client.withdraw(&samwise, &(withdraw_amount * 2));
 
     // -> verify withdraw
     assert_eq!(usdc_client.balance(&frodo), withdraw_amount);
@@ -375,11 +393,10 @@ fn test_happy_path() {
      * -> claim emissions for the deposit
      */
 
-    // claim fees for usdc. There is a rounding loss of 1 stroop.
+    // claim fees for usdc
     let expected_fees = merry_profit
         .fixed_mul_floor(0_1000000, SCALAR_7)
-        .unwrap_optimized()
-        - 1;
+        .unwrap_optimized();
     fee_vault_client.admin_withdraw(&expected_fees);
 
     // -> verify claim fees auth

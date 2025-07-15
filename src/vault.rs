@@ -224,7 +224,11 @@ pub fn deposit(
 /// * `amount` - The amount of underlying amount withdrawn from the vault
 ///
 /// ### Returns
-/// * `(i128, i128)` - (The amount of b_tokens burned from the vault, the amount of shares burned from the user)
+/// * `(i128, i128, i128)` - (
+///         The underlying to withdraw from the pool,
+///         The amount of b_tokens burned from the vault,
+///         the amount of shares burned from the user
+///     )
 ///
 /// ### Panics
 /// * If the amount is less than or equal to 0
@@ -235,19 +239,27 @@ pub fn withdraw(
     asset: &Address,
     user: &Address,
     amount: i128,
-) -> (i128, i128) {
+) -> (i128, i128, i128) {
     let mut vault = get_vault_updated(e, pool, asset);
     let mut user_shares = storage::get_vault_shares(e, user);
 
     update_rewards(e, vault.total_shares, user, user_shares);
 
-    let b_tokens_amount = vault.underlying_to_b_tokens_up(amount);
+    let mut b_tokens_amount = vault.underlying_to_b_tokens_up(amount);
     require_positive(e, b_tokens_amount, FeeVaultError::InvalidBTokensBurnt);
-    let share_amount = vault.b_tokens_to_shares_up(b_tokens_amount);
+    let mut share_amount = vault.b_tokens_to_shares_up(b_tokens_amount);
     require_positive(e, share_amount, FeeVaultError::InvalidSharesBurnt);
+    let mut underlying_amount = amount;
 
     if share_amount > user_shares {
-        panic_with_error!(e, FeeVaultError::BalanceError);
+        // input amount is too high - burn all shares if user has shares to burn
+        // round b_token and underlying down to prevent excess withdrawal amounts
+        require_positive(e, user_shares, FeeVaultError::BalanceError);
+        share_amount = user_shares;
+        underlying_amount =
+            vault.b_tokens_to_underlying_down(vault.shares_to_b_tokens_down(share_amount));
+        // the blend pool will round up the b_tokens burnt based on the underlying amount withdrawn
+        b_tokens_amount = vault.underlying_to_b_tokens_up(underlying_amount);
     }
 
     if vault.total_shares < share_amount || vault.total_b_tokens < b_tokens_amount {
@@ -260,7 +272,7 @@ pub fn withdraw(
     user_shares -= share_amount;
     storage::set_vault_data(e, &vault);
     storage::set_vault_shares(e, user, user_shares);
-    (b_tokens_amount, share_amount)
+    (underlying_amount, b_tokens_amount, share_amount)
 }
 
 /// Admin deposits tokens into the vault. Does not perform the call to the pool to deposit the tokens.
@@ -603,8 +615,9 @@ mod generic_tests {
             vault_data.b_rate = new_b_rate;
             let withdraw_amount = vault_data.b_tokens_to_underlying_down(b_tokens_to_withdraw);
 
-            let (b_tokens_burnt, shares_burnt) =
+            let (underlying_withdrawn, b_tokens_burnt, shares_burnt) =
                 withdraw(&e, &pool, &asset, &samwise, withdraw_amount);
+            assert_eq!(underlying_withdrawn, withdraw_amount);
 
             let new_vault = storage::get_vault_data(&e);
             assert_eq!(b_tokens_burnt, b_tokens_to_withdraw);
@@ -649,8 +662,9 @@ mod generic_tests {
             storage::set_vault_shares(&e, &samwise, vault_data.total_shares);
             let withdraw_amount = vault_data.b_tokens_to_underlying_down(1000_0000000);
 
-            let (b_tokens_burnt, shares_burnt) =
+            let (underlying_withdrawn, b_tokens_burnt, shares_burnt) =
                 withdraw(&e, &pool, &asset, &samwise, withdraw_amount);
+            assert_eq!(underlying_withdrawn, withdraw_amount);
             assert_eq!(b_tokens_burnt, 1000_0000000);
             assert_eq!(shares_burnt, 1200_0000000);
             let new_balance = storage::get_vault_shares(&e, &samwise);
@@ -735,15 +749,16 @@ mod generic_tests {
             let sam_underlying_balance = vault_data.b_tokens_to_underlying_down(sam_b_tokens);
 
             // Withdraw whole underlying balance as read by the contract
-            let (b_tokens_burnt, shares_burnt) =
+            let (underlying_withdrawn, b_tokens_burnt, shares_burnt) =
                 withdraw(&e, &pool, &asset, &samwise, sam_underlying_balance);
+            assert_eq!(underlying_withdrawn, sam_underlying_balance);
             assert_eq!(b_tokens_burnt, sam_b_tokens);
             assert_eq!(shares_burnt, sam_shares);
+            assert_eq!(storage::get_vault_shares(&e, &samwise), 0);
         });
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #10)")]
     fn test_withdraw_over_balance() {
         let e = Env::default();
         e.mock_all_auths();
@@ -762,11 +777,59 @@ mod generic_tests {
             };
             storage::set_vault_data(&e, &vault_data);
 
-            storage::set_vault_shares(&e, &samwise, 1000_0000000);
-            let sam_b_tokens: i128 = vault_data.shares_to_b_tokens_down(1000_0000000);
+            let sam_shares = 1000_0000000;
+            storage::set_vault_shares(&e, &samwise, sam_shares);
+            let sam_b_tokens: i128 =
+                vault_data.shares_to_b_tokens_down(storage::get_vault_shares(&e, &samwise));
             let sam_underlying_balance = vault_data.b_tokens_to_underlying_down(sam_b_tokens);
+
             // Try to withdraw 1 more than `sam_underlying_balance`
-            withdraw(&e, &pool, &asset, &samwise, sam_underlying_balance + 1);
+            let (underlying_withdrawn, b_tokens_burnt, shares_burnt) =
+                withdraw(&e, &pool, &asset, &samwise, sam_underlying_balance + 1);
+            // Pulls back down to `sam_underlying_balance`
+            assert_eq!(underlying_withdrawn, sam_underlying_balance);
+            assert_eq!(b_tokens_burnt, sam_b_tokens);
+            assert_eq!(shares_burnt, sam_shares);
+            assert_eq!(storage::get_vault_shares(&e, &samwise), 0);
+        });
+    }
+
+    #[test]
+    fn test_withdraw_over_balance_full_vault() {
+        let e = Env::default();
+        e.mock_all_auths();
+
+        let bombadil = Address::generate(&e);
+        let samwise = Address::generate(&e);
+        let (vault_address, pool, asset) = create_test_fee_vault(&e, &bombadil, 0, 0_1000000, None);
+
+        e.as_contract(&vault_address, || {
+            let vault_data = VaultData {
+                total_b_tokens: 1000_0000000,
+                total_shares: 1200_0000000,
+                b_rate: 1_100_000_000_000,
+                last_update_timestamp: e.ledger().timestamp(),
+                admin_balance: 0,
+            };
+            storage::set_vault_data(&e, &vault_data);
+
+            let sam_shares = 1200_0000000;
+            storage::set_vault_shares(&e, &samwise, sam_shares);
+            let sam_b_tokens: i128 =
+                vault_data.shares_to_b_tokens_down(storage::get_vault_shares(&e, &samwise));
+            let sam_underlying_balance = vault_data.b_tokens_to_underlying_down(sam_b_tokens);
+
+            let (underlying_withdrawn, b_tokens_burnt, shares_burnt) =
+                withdraw(&e, &pool, &asset, &samwise, i64::MAX as i128);
+            // Pulls back down to `sam_underlying_balance`
+            assert_eq!(underlying_withdrawn, sam_underlying_balance);
+            assert_eq!(b_tokens_burnt, sam_b_tokens);
+            assert_eq!(shares_burnt, sam_shares);
+            assert_eq!(storage::get_vault_shares(&e, &samwise), 0);
+            let vault_data = storage::get_vault_data(&e);
+            assert_eq!(vault_data.total_b_tokens, 0);
+            assert_eq!(vault_data.total_shares, 0);
+            assert_eq!(vault_data.admin_balance, 0);
         });
     }
 
