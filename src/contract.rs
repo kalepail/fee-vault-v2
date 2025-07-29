@@ -9,7 +9,7 @@ use crate::{
     vault::{self, VaultData},
 };
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, Vec, BytesN};
 
 #[contract]
 pub struct FeeVault;
@@ -393,6 +393,23 @@ impl FeeVault {
         FeeVaultEvents::vault_rewards_set(&e, &admin, &token, reward_amount, expiration);
     }
 
+    /// ADMIN ONLY
+    /// Upgrades the contract to use new WASM bytecode. This allows the contract
+    /// to be updated with new functionality while preserving its state and address.
+    ///
+    /// ### Arguments
+    /// * `new_wasm_hash` - The hash of the new WASM bytecode to upgrade to
+    ///
+    /// ### Panics
+    /// * Only the admin can call this function
+    pub fn upgrade_contract(e: Env, new_wasm_hash: BytesN<32>) {
+        storage::extend_instance(&e);
+        let admin = storage::get_admin(&e);
+        admin.require_auth();
+
+        e.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+    }
+
     //********** Read-Write ***********//
 
     /// Deposits tokens into the fee vault for a specific reserve. Requires the signer to sign
@@ -438,6 +455,7 @@ impl FeeVault {
 
     /// Withdraws tokens from the fee vault for a specific reserve. If the input amount is greater
     /// than the user's underlying balance, the user's full balance will be withdrawn.
+    /// Requires the signer to sign the transaction if the signer is set.
     ///
     /// ### Arguments
     /// * `user` - The address of the user making the withdrawal
@@ -453,6 +471,9 @@ impl FeeVault {
     pub fn withdraw(e: Env, user: Address, amount: i128) -> i128 {
         storage::extend_instance(&e);
         user.require_auth();
+        if let Some(signer) = storage::get_signer(&e) {
+            signer.require_auth();
+        }
         require_positive(&e, amount, FeeVaultError::InvalidAmount);
 
         let pool = storage::get_pool(&e);

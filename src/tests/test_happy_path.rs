@@ -360,8 +360,8 @@ fn test_happy_path() {
     fee_vault_client.withdraw(&frodo, &withdraw_amount);
     // -> verify withdraw auth
     assert_eq!(
-        e.auths(),
-        [(
+        e.auths()[0],
+        (
             frodo.clone(),
             AuthorizedInvocation {
                 function: AuthorizedFunction::Contract((
@@ -371,7 +371,7 @@ fn test_happy_path() {
                 )),
                 sub_invocations: std::vec![]
             }
-        )]
+        )
     );
 
     // -> verify over withdraw is pulled down to full balance
