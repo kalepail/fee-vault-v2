@@ -166,7 +166,7 @@ impl EnvTestUtils for Env {
     fn jump(&self, ledgers: u32) {
         self.ledger().set(LedgerInfo {
             timestamp: self.ledger().timestamp().saturating_add(ledgers as u64 * 5),
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: self.ledger().sequence().saturating_add(ledgers),
             network_id: Default::default(),
             base_reserve: 10,
@@ -179,7 +179,7 @@ impl EnvTestUtils for Env {
     fn jump_time(&self, seconds: u64) {
         self.ledger().set(LedgerInfo {
             timestamp: self.ledger().timestamp().saturating_add(seconds),
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: self.ledger().sequence().saturating_add(1),
             network_id: Default::default(),
             base_reserve: 10,
@@ -192,7 +192,7 @@ impl EnvTestUtils for Env {
     fn set_default_info(&self) {
         self.ledger().set(LedgerInfo {
             timestamp: 1441065600, // Sept 1st, 2015 12:00:00 AM UTC
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 100,
             network_id: Default::default(),
             base_reserve: 10,

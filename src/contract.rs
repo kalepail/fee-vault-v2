@@ -9,7 +9,7 @@ use crate::{
     vault::{self, VaultData},
 };
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec, BytesN};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Vec};
 
 #[contract]
 pub struct FeeVault;
@@ -407,7 +407,8 @@ impl FeeVault {
         let admin = storage::get_admin(&e);
         admin.require_auth();
 
-        e.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        e.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
     }
 
     //********** Read-Write ***********//
