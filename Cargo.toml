@@ -17,7 +17,7 @@ testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk = "23.1.0"
-soroban-fixed-point-math = "1.4.0"
+soroban-fixed-point-math = { git = "https://github.com/kalepail/soroban-fixed-point-math" }
 blend-contract-sdk = { git = "https://github.com/kalepail/blend-contract-sdk" }
 
 [dev-dependencies]
