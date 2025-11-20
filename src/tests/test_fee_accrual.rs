@@ -22,7 +22,7 @@ fn test_fee_accrual() {
     e.mock_all_auths();
     e.ledger().set(LedgerInfo {
         timestamp: 1441065600, // Sept 1st, 2015 12:00:00 AM UTC
-        protocol_version: 22,
+        protocol_version: 23,
         sequence_number: 100,
         network_id: Default::default(),
         base_reserve: 10,
@@ -347,7 +347,7 @@ fn test_fee_accrual_capped_rate() {
     e.mock_all_auths();
     e.ledger().set(LedgerInfo {
         timestamp: 1441065600, // Sept 1st, 2015 12:00:00 AM UTC
-        protocol_version: 22,
+        protocol_version: 23,
         sequence_number: 100,
         network_id: Default::default(),
         base_reserve: 10,
@@ -662,7 +662,7 @@ fn test_fee_accrual_fixed_rate() {
     e.mock_all_auths();
     e.ledger().set(LedgerInfo {
         timestamp: 1441065600, // Sept 1st, 2015 12:00:00 AM UTC
-        protocol_version: 22,
+        protocol_version: 23,
         sequence_number: 100,
         network_id: Default::default(),
         base_reserve: 10,

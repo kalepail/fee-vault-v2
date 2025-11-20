@@ -289,7 +289,7 @@ mod tests {
         let block_timestamp = 1713139200 + 1234;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -341,7 +341,7 @@ mod tests {
         let block_timestamp = 1713139200 + 1234;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -375,7 +375,7 @@ mod tests {
         let block_timestamp = 1713139200 + 1234;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -427,7 +427,7 @@ mod tests {
         let block_timestamp = 1713139200 + 12345;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -474,7 +474,7 @@ mod tests {
         let block_timestamp = 1713139200 + 12345;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -521,7 +521,7 @@ mod tests {
         let block_timestamp = 1713139200 + 1234;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -575,7 +575,7 @@ mod tests {
         let block_timestamp = 1713139200 + 1234;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -643,7 +643,7 @@ mod tests {
         let block_timestamp = 1713139200 + 1234;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -680,7 +680,7 @@ mod tests {
         let block_timestamp = 1713139200 + 1234;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -751,7 +751,7 @@ mod tests {
         let block_timestamp = 1713139200 + 1234;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -795,7 +795,7 @@ mod tests {
         let block_timestamp = 1713139200 + 1234;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -849,7 +849,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -902,7 +902,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -964,7 +964,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -1027,7 +1027,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -1079,7 +1079,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -1144,7 +1144,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -1217,7 +1217,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -1258,7 +1258,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -1299,7 +1299,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -1340,7 +1340,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
@@ -1390,7 +1390,7 @@ mod tests {
         let block_timestamp = 1713139200;
         e.ledger().set(LedgerInfo {
             timestamp: block_timestamp,
-            protocol_version: 22,
+            protocol_version: 23,
             sequence_number: 0,
             network_id: Default::default(),
             base_reserve: 10,
